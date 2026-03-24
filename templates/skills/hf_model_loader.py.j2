@@ -1,0 +1,46 @@
+"""HuggingFace model loader skill - load and manage models from the Hub."""
+
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+
+class ModelLoader:
+    """Load and manage a HuggingFace model."""
+
+    def __init__(self, model_id: str, device: str = "auto", dtype=torch.float16):
+        self.model_id = model_id
+        self.device = device
+        self.dtype = dtype
+        self.model = None
+        self.tokenizer = None
+
+    def load(self):
+        """Load the model and tokenizer."""
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self.model = AutoModelForCausalLM.from_pretrained(
+            self.model_id,
+            torch_dtype=self.dtype,
+            device_map=self.device,
+        )
+        return self
+
+    def generate(self, prompt: str, max_new_tokens: int = 256, **kwargs) -> str:
+        """Generate text from a prompt."""
+        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                **kwargs,
+            )
+        return self.tokenizer.decode(outputs[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+
+    def unload(self):
+        """Free GPU memory."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        if self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+        torch.cuda.empty_cache()

@@ -1,0 +1,78 @@
+# Example subnet configuration for SN1 (Apex / Text Prompting)
+# This file shows the format agents use to understand a subnet.
+
+netuid: 1
+name: "Apex"
+description: "Text generation subnet - miners respond to text prompts with high-quality completions"
+repo_url: "https://github.com/opentensor/text-prompting"
+docs_url: ""
+
+task_type: "text_generation"
+task_description: |
+  Miners receive text prompts from validators and must return high-quality
+  completions. Validators score responses based on quality, coherence,
+  and relevance. Using larger, more capable models generally yields better scores.
+
+protocol:
+  synapse_class: "Prompting"
+  request_fields:
+    roles: "list[str]"
+    messages: "list[str]"
+  response_fields:
+    completion: "str"
+  timeout_seconds: 15.0
+  notes: "Validators send multi-turn conversations and expect a completion"
+
+scoring:
+  mechanism: "quality"
+  criteria:
+    - "Response quality and coherence"
+    - "Relevance to the prompt"
+    - "Factual accuracy"
+    - "Response speed"
+  weights:
+    quality: 0.6
+    relevance: 0.2
+    speed: 0.2
+  penalty_conditions:
+    - "Empty or whitespace-only responses"
+    - "Timeout (no response within deadline)"
+    - "Repeated/template responses"
+  notes: "Quality is judged by a reward model, not string matching"
+
+hardware:
+  gpu: "A100 40GB"
+  vram_gb: 40
+  ram_gb: 64
+  storage_gb: 200
+  cpu_cores: 8
+  bandwidth_mbps: 1000
+  notes: "Larger models need more VRAM. vLLM recommended for throughput."
+
+python_dependencies:
+  - "transformers>=4.35"
+  - "torch>=2.0"
+  - "vllm>=0.2"
+  - "accelerate"
+
+model_dependencies:
+  - "meta-llama/Llama-3.1-70B-Instruct"
+
+env_vars:
+  HF_TOKEN: "your-huggingface-token"
+
+strategy_hints:
+  - "Use vLLM for high-throughput inference"
+  - "Larger models generally score better"
+  - "Optimize for both quality AND speed - the scoring is a composite"
+  - "Consider quantization (AWQ/GPTQ) to fit larger models in less VRAM"
+  - "Monitor what top miners are using via their axon metadata"
+
+known_pitfalls:
+  - "Don't use tiny models - they score very poorly"
+  - "Don't return the prompt as part of the response"
+  - "Handle multi-turn conversations correctly (roles + messages)"
+  - "Don't hardcode responses or use templates"
+
+reference_implementations:
+  - "https://github.com/opentensor/text-prompting/blob/main/neurons/miners"

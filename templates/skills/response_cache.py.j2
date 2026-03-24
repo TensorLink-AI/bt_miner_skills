@@ -1,0 +1,48 @@
+"""Response cache skill - LRU cache for repeated requests."""
+
+import hashlib
+import time
+from collections import OrderedDict
+from threading import Lock
+
+
+class ResponseCache:
+    """Thread-safe LRU cache for miner responses."""
+
+    def __init__(self, max_size: int = 1000, ttl_seconds: float = 300):
+        self.max_size = max_size
+        self.ttl = ttl_seconds
+        self._cache: OrderedDict[str, tuple[float, any]] = OrderedDict()
+        self._lock = Lock()
+        self.hits = 0
+        self.misses = 0
+
+    def _make_key(self, *args, **kwargs) -> str:
+        raw = str(args) + str(sorted(kwargs.items()))
+        return hashlib.sha256(raw.encode()).hexdigest()
+
+    def get(self, key: str):
+        with self._lock:
+            if key in self._cache:
+                ts, value = self._cache[key]
+                if time.time() - ts < self.ttl:
+                    self._cache.move_to_end(key)
+                    self.hits += 1
+                    return value
+                else:
+                    del self._cache[key]
+            self.misses += 1
+            return None
+
+    def put(self, key: str, value):
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = (time.time(), value)
+            while len(self._cache) > self.max_size:
+                self._cache.popitem(last=False)
+
+    @property
+    def hit_rate(self) -> float:
+        total = self.hits + self.misses
+        return self.hits / total if total > 0 else 0.0

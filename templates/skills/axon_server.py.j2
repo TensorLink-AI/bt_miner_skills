@@ -1,0 +1,38 @@
+"""Axon server skill - handles networking, blacklisting, and priority."""
+
+import bittensor as bt
+
+
+def setup_axon(wallet, config, forward_fn, blacklist_fn=None, priority_fn=None):
+    """Create and configure an axon server."""
+    axon = bt.axon(wallet=wallet, config=config)
+    axon.attach(
+        forward_fn=forward_fn,
+        blacklist_fn=blacklist_fn,
+        priority_fn=priority_fn,
+    )
+    return axon
+
+
+def default_blacklist(metagraph):
+    """Create a blacklist function that only allows validators."""
+    def blacklist(synapse) -> tuple[bool, str]:
+        try:
+            caller_uid = metagraph.hotkeys.index(synapse.dendrite.hotkey)
+            if not metagraph.validator_permit[caller_uid]:
+                return True, "Not a validator"
+            return False, ""
+        except ValueError:
+            return True, "Hotkey not in metagraph"
+    return blacklist
+
+
+def default_priority(metagraph):
+    """Create a priority function based on validator stake."""
+    def priority(synapse) -> float:
+        try:
+            caller_uid = metagraph.hotkeys.index(synapse.dendrite.hotkey)
+            return float(metagraph.stake[caller_uid])
+        except ValueError:
+            return 0.0
+    return priority
