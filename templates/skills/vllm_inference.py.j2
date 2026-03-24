@@ -1,0 +1,38 @@
+"""vLLM inference skill - high-performance LLM serving."""
+
+from vllm import LLM, SamplingParams
+
+
+class VLLMEngine:
+    """High-performance LLM inference using vLLM."""
+
+    def __init__(self, model_id: str, tensor_parallel_size: int = 1, gpu_memory_utilization: float = 0.9):
+        self.model_id = model_id
+        self.tensor_parallel_size = tensor_parallel_size
+        self.gpu_memory_utilization = gpu_memory_utilization
+        self.engine = None
+
+    def load(self):
+        """Initialize the vLLM engine."""
+        self.engine = LLM(
+            model=self.model_id,
+            tensor_parallel_size=self.tensor_parallel_size,
+            gpu_memory_utilization=self.gpu_memory_utilization,
+        )
+        return self
+
+    def generate(self, prompt: str, max_tokens: int = 256, temperature: float = 0.7, top_p: float = 0.9) -> str:
+        """Generate text from a prompt."""
+        params = SamplingParams(
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        outputs = self.engine.generate([prompt], params)
+        return outputs[0].outputs[0].text
+
+    def generate_batch(self, prompts: list[str], max_tokens: int = 256, temperature: float = 0.7) -> list[str]:
+        """Generate text for a batch of prompts."""
+        params = SamplingParams(max_tokens=max_tokens, temperature=temperature)
+        outputs = self.engine.generate(prompts, params)
+        return [o.outputs[0].text for o in outputs]
