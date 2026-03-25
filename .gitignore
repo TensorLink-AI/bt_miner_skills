@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .ralph_state/
 workspace/
+.env
