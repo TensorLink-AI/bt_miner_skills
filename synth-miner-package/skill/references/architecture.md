@@ -135,6 +135,7 @@ synth-miner-mlops/
 | Process Manager | PM2 (production miner) |
 | Price Feed | Pyth Oracle, Binance API |
 | Bittensor | bittensor SDK, btcli |
+| GPU Backend | Basilica (optional, `COMPUTE_BACKEND="basilica"`) — **cheap GPUs only: A4000, V100, L40** |
 | Monitoring | Logging + optional Grafana/Prometheus |
 
 ## Network Configuration
