@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from ralph_loop.config import CHUTES_API_KEY, CHUTES_MODEL, LOOP_INTERVAL_SECONDS
+from ralph_loop.config import CHUTES_API_KEY, CHUTES_MODEL, LOOP_INTERVAL_SECONDS, WORKSPACE_ROOT
 
 
 def main() -> None:
@@ -21,6 +21,10 @@ def main() -> None:
         "--status", action="store_true", help="Show current state for all skills"
     )
     parser.add_argument(
+        "--reset", action="store_true",
+        help="Reset state for the targeted skill(s) and start fresh",
+    )
+    parser.add_argument(
         "--subnet", "-s", type=str, default=None,
         help="Target a specific subnet by netuid (e.g. 50), name (e.g. synth), "
              "or package name. Without this, all discovered skills run.",
@@ -33,7 +37,7 @@ def main() -> None:
     )
 
     from ralph_loop.skill_discovery import discover_skills
-    from ralph_loop.state import load_state
+    from ralph_loop.state import load_state, reset_state
 
     if args.list_skills:
         skills = discover_skills(filter_subnet=args.subnet)
@@ -47,19 +51,27 @@ def main() -> None:
             print("  No skill packages found.")
         return
 
+    if args.reset:
+        skills = discover_skills(filter_subnet=args.subnet)
+        for s in skills:
+            reset_state(s.name)
+            print(f"  Reset state for: {s.name}")
+        if not skills:
+            print("  No skill packages found to reset.")
+        return
+
     if args.status:
         skills = discover_skills(filter_subnet=args.subnet)
         for s in skills:
             state = load_state(s.name)
             sn_label = f"SN{s.netuid}" if s.netuid else "no netuid"
             print(f"  {s.name} ({sn_label}):")
-            print(f"    Mode: {state.mode}")
-            if state.mode == "build":
-                print(f"    Current phase: {state.current_phase}/8")
-            else:
-                print(f"    Maintain cycles: {state.maintain_cycle}")
-            print(f"    Total iterations: {state.iteration_count}")
-            print(f"    Phase status: {state.phase_status}")
+            print(f"    Iterations: {state.iteration_count}")
+            print(f"    Files written: {len(state.files_written)}")
+            print(f"    Commands run: {len(state.commands_run)}")
+            print(f"    Workspace: {state.workspace_dir or '(not started)'}")
+            if state.requested_references:
+                print(f"    Pending refs: {state.requested_references}")
         return
 
     # Validate config before starting
@@ -70,6 +82,7 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Ralph Loop starting (model={CHUTES_MODEL}, interval={LOOP_INTERVAL_SECONDS}s)")
+    print(f"Workspace root: {WORKSPACE_ROOT}")
     if args.subnet:
         print(f"Targeting subnet: {args.subnet}")
 
