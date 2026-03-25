@@ -4,7 +4,7 @@ import argparse
 import logging
 import sys
 
-from ralph_loop.config import CHUTES_API_KEY, CHUTES_MODEL, LOOP_INTERVAL_SECONDS, WORKSPACE_ROOT
+from ralph_loop.config import CHUTES_API_KEY, CHUTES_MODEL, WORKSPACE_ROOT
 
 
 def main() -> None:
@@ -81,7 +81,7 @@ def main() -> None:
         print("  Get your key at https://chutes.ai", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Ralph Loop starting (model={CHUTES_MODEL}, interval={LOOP_INTERVAL_SECONDS}s)")
+    print(f"Ralph Loop starting (model={CHUTES_MODEL})")
     print(f"Workspace root: {WORKSPACE_ROOT}")
     if args.subnet:
         print(f"Targeting subnet: {args.subnet}")

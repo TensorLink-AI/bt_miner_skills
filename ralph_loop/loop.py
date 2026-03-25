@@ -7,9 +7,8 @@ execution output, and decides what to work on each iteration.
 import logging
 import os
 import re
-import time
 
-from ralph_loop.config import LOOP_INTERVAL_SECONDS, MAX_ITERATIONS, WORKSPACE_ROOT
+from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT
 from ralph_loop.executor import execute_response, get_workspace_snapshot
 from ralph_loop.llm import chat
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
@@ -145,5 +144,3 @@ def run_loop(filter_subnet: str | None = None) -> None:
             save_state(skill.name, state)
 
         iteration += 1
-        logger.info("Sleeping %d seconds before next iteration...", LOOP_INTERVAL_SECONDS)
-        time.sleep(LOOP_INTERVAL_SECONDS)
