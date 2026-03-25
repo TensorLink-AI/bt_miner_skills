@@ -29,6 +29,5 @@ WORKSPACE_ROOT = os.environ.get(
     os.path.join(REPO_ROOT, "workspace"),
 )
 
-# the-commons knowledge sharing
-COMMONS_API_TOKEN = os.environ.get("COMMONS_API_TOKEN", "")
-COMMONS_URL = os.environ.get("COMMONS_URL", "")  # e.g. https://commons.tensorlink.ai
+# the-commons knowledge sharing (MCP SSE transport)
+COMMONS_URL = os.environ.get("COMMONS_URL", "")  # e.g. http://localhost:8000/sse

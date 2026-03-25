@@ -8,7 +8,7 @@ import logging
 import os
 import re
 
-from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_API_TOKEN, COMMONS_URL
+from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_URL
 from ralph_loop.executor import execute_response, get_workspace_snapshot
 from ralph_loop.llm import chat
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
@@ -36,12 +36,11 @@ def _build_knowledge_prompt() -> str:
     ]
 
     if COMMONS_URL:
-        parts.append(f"**Remote server URL:** `{COMMONS_URL}`")
-    if COMMONS_API_TOKEN:
-        parts.append(f"**Bearer token for auth:** `{COMMONS_API_TOKEN}`")
+        parts.append(f"**Remote SSE server URL:** `{COMMONS_URL}`")
         parts.append(
-            "Include this token in requests as `Authorization: Bearer <token>` "
-            "or pass it via the `API_TOKEN` env var when starting the server.\n"
+            "Connect to this URL using the MCP SSE transport. "
+            "The server uses agent identification (pass your agent name in tool calls), "
+            "not bearer tokens.\n"
         )
 
     parts.extend([
