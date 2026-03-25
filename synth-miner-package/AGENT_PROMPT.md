@@ -78,6 +78,12 @@ pass before moving on. If a gate fails, fix the issue before proceeding.
    - CRPS scoring parameters (softmax beta, rolling window, etc.)
    - Pyth Oracle price IDs
    - Binance symbol mappings
+   - Basilica GPU configuration:
+     ```python
+     COMPUTE_BACKEND = "local"  # "local" or "basilica"
+     BASILICA_GPU_TYPE = "A4000"  # Allowed: "A4000", "V100", "L40" (cheap GPUs only)
+     BASILICA_ALLOWED_GPUS = ["A4000", "V100", "L40"]
+     ```
 
 **Gate**: `python -c "from config import ASSETS_24H, ASSET_WEIGHTS, INTERVALS_24H; print('OK')"` succeeds.
 
@@ -183,7 +189,10 @@ If `"local"` (default), run everything on the local machine.
    - Save best model per fold
 2. If using Basilica:
    - Upload processed data to a Basilica Volume
-   - Deploy a GPU training job using `basilica-sdk`
+   - Deploy a GPU training job using `basilica-sdk`, specifying `gpu_type=config.BASILICA_GPU_TYPE`
+   - Only use cheap GPUs from `BASILICA_ALLOWED_GPUS` (A4000, V100, L40) — do NOT use
+     expensive GPUs like A100, H100, A6000, etc.
+   - Validate that `BASILICA_GPU_TYPE in BASILICA_ALLOWED_GPUS` before deploying
    - Monitor training via `deployment.logs()`
    - Download results from the Volume when complete
 3. If local: train on each fold for each asset directly
@@ -210,8 +219,9 @@ If `"local"` (default), run everything on the local machine.
    - For each config, run full walk-forward training + emulator scoring
    - Log everything to leaderboard
    - If `COMPUTE_BACKEND == "basilica"`: deploy the search as a single GPU job that
-     iterates through all configs. Use a Basilica Volume for checkpoints so partial
-     results survive if the job times out. Set `ttl_seconds=14400` (4 hours).
+     iterates through all configs. Use `gpu_type=config.BASILICA_GPU_TYPE` (must be one
+     of A4000, V100, L40 — cheap GPUs only). Use a Basilica Volume for checkpoints so
+     partial results survive if the job times out. Set `ttl_seconds=14400` (4 hours).
 5. After search completes, analyze results:
    - Which configs beat baseline by >15%?
    - Which assets are weakest across all configs?

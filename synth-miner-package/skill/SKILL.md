@@ -69,7 +69,7 @@ Before doing anything, read the appropriate reference files from `references/` r
 | **Checking live competition** | `synth_api.md` |
 | **Understanding data leakage risks** | `data_pipeline.md` (Section: Anti-Leakage) |
 | **Adding a new model architecture** | `models.md` (Section: Custom Models) |
-| **Training on remote GPU (Basilica)** | Install **basilica-cli-helper** external skill or use pre-installed `basilica-sdk` skill |
+| **Training on remote GPU (Basilica)** | Install **basilica-cli-helper** external skill or use pre-installed `basilica-sdk` skill. **Use cheap GPUs only**: A4000, V100, or L40 (configured via `BASILICA_GPU_TYPE` in config.py) |
 
 ---
 
