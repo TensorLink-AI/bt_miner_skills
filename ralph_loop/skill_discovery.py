@@ -1,6 +1,7 @@
 """Discover and load bittensor miner skill packages from the repo."""
 
 import glob
+import json
 import os
 from dataclasses import dataclass, field
 
@@ -15,11 +16,21 @@ class SkillPackage:
     path: str
     agent_prompt: str
     skill_doc: str
+    netuid: int | None = None
+    subnet_name: str = ""
     references: dict[str, str] = field(default_factory=dict)
 
 
-def discover_skills() -> list[SkillPackage]:
-    """Find all skill packages in the repo and load their contents."""
+def discover_skills(
+    filter_subnet: str | None = None,
+) -> list[SkillPackage]:
+    """Find all skill packages in the repo and load their contents.
+
+    Args:
+        filter_subnet: If set, only return skills matching this subnet.
+            Accepts a netuid (e.g. "50"), subnet name (e.g. "synth"),
+            or package directory name (e.g. "synth-miner-package").
+    """
     pattern = os.path.join(REPO_ROOT, SKILLS_DIRS_PATTERN)
     packages = []
 
@@ -38,6 +49,16 @@ def discover_skills() -> list[SkillPackage]:
         with open(skill_doc_path, "r") as f:
             skill_doc = f.read()
 
+        # Load subnet metadata if present
+        netuid = None
+        subnet_name = ""
+        meta_path = os.path.join(pkg_dir, "subnet.json")
+        if os.path.exists(meta_path):
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+            netuid = meta.get("netuid")
+            subnet_name = meta.get("name", "")
+
         # Load reference files
         refs = {}
         refs_dir = os.path.join(pkg_dir, "skill", "references")
@@ -53,8 +74,34 @@ def discover_skills() -> list[SkillPackage]:
             path=pkg_dir,
             agent_prompt=agent_prompt,
             skill_doc=skill_doc,
+            netuid=netuid,
+            subnet_name=subnet_name,
             references=refs,
         )
         packages.append(pkg)
 
+    if filter_subnet is not None:
+        packages = _filter_skills(packages, filter_subnet)
+
     return packages
+
+
+def _filter_skills(skills: list[SkillPackage], query: str) -> list[SkillPackage]:
+    """Filter skills by netuid, subnet name, or package name."""
+    query_lower = query.lower().strip()
+
+    # Try matching as netuid number
+    try:
+        target_uid = int(query_lower)
+        matched = [s for s in skills if s.netuid == target_uid]
+        if matched:
+            return matched
+    except ValueError:
+        pass
+
+    # Match by subnet name or package name (substring)
+    return [
+        s for s in skills
+        if query_lower in s.subnet_name.lower()
+        or query_lower in s.name.lower()
+    ]

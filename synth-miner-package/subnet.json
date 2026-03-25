@@ -1,0 +1,5 @@
+{
+  "netuid": 50,
+  "name": "synth",
+  "description": "Probabilistic price path forecasting scored by CRPS"
+}

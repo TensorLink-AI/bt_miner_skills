@@ -20,6 +20,11 @@ def main() -> None:
     parser.add_argument(
         "--status", action="store_true", help="Show current state for all skills"
     )
+    parser.add_argument(
+        "--subnet", "-s", type=str, default=None,
+        help="Target a specific subnet by netuid (e.g. 50), name (e.g. synth), "
+             "or package name. Without this, all discovered skills run.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -31,19 +36,23 @@ def main() -> None:
     from ralph_loop.state import load_state
 
     if args.list_skills:
-        skills = discover_skills()
+        skills = discover_skills(filter_subnet=args.subnet)
         for s in skills:
-            print(f"  {s.name} ({s.path})")
+            sn_label = f"SN{s.netuid}" if s.netuid else "no netuid"
+            print(f"  {s.name} ({sn_label}) — {s.path}")
+            if s.subnet_name:
+                print(f"    Subnet: {s.subnet_name}")
             print(f"    References: {list(s.references.keys())}")
         if not skills:
             print("  No skill packages found.")
         return
 
     if args.status:
-        skills = discover_skills()
+        skills = discover_skills(filter_subnet=args.subnet)
         for s in skills:
             state = load_state(s.name)
-            print(f"  {s.name}:")
+            sn_label = f"SN{s.netuid}" if s.netuid else "no netuid"
+            print(f"  {s.name} ({sn_label}):")
             print(f"    Current phase: {state.current_phase}")
             print(f"    Iterations: {state.iteration_count}")
             print(f"    Phase status: {state.phase_status}")
@@ -57,9 +66,11 @@ def main() -> None:
         sys.exit(1)
 
     print(f"Ralph Loop starting (model={CHUTES_MODEL}, interval={LOOP_INTERVAL_SECONDS}s)")
+    if args.subnet:
+        print(f"Targeting subnet: {args.subnet}")
 
     from ralph_loop.loop import run_loop
-    run_loop()
+    run_loop(filter_subnet=args.subnet)
 
 
 if __name__ == "__main__":

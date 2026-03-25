@@ -116,9 +116,9 @@ def run_skill_iteration(skill: SkillPackage, state: PhaseState) -> PhaseState:
     return state
 
 
-def run_loop() -> None:
+def run_loop(filter_subnet: str | None = None) -> None:
     """Main ralph loop — discover skills and iterate through their phases."""
-    skills = discover_skills()
+    skills = discover_skills(filter_subnet=filter_subnet)
     if not skills:
         logger.error("No skill packages found in the repo!")
         return
