@@ -250,6 +250,16 @@ If `"local"` (default), run everything on the local machine.
 - Live CRPS within 20% of backtest CRPS
 - No errors or timeouts in any prediction cycle
 - Response time < 30 seconds per prediction
+- **Competitiveness gate (required before deployment)**:
+  - Fetch current network scores: `GET /validation/scores/latest` for each asset/interval
+  - Compare your live CRPS against active miners' scores on the network
+  - Your model must score below the network **median CRPS on ≥70% of asset/interval pairs**
+  - Print a ranked comparison table: your CRPS vs network p25 / median / p75 for each asset
+  - If you fail this gate, do NOT proceed to Phase 8. Instead:
+    1. Log which assets/intervals are weakest relative to the network
+    2. Return to Phase 5 or 6 to retrain or search for better configs targeting those weak spots
+    3. Re-run live testing after improvements
+  - This gate ensures you only deploy a model that would actually earn positive emissions
 
 ### Phase 8: Deployment Preparation
 **Goal**: Set up model registry and deployment infrastructure.
@@ -321,7 +331,7 @@ The task is complete when:
 1. ✅ All 8 phase gates pass
 2. ✅ A model is registered in the model registry at "production" stage
 3. ✅ The model beats GBM baseline by >15% on CRPS across all assets
-4. ✅ Live testing shows CRPS within 20% of backtest
+4. ✅ Live testing shows CRPS within 20% of backtest AND below network median on ≥70% of asset/interval pairs
 5. ✅ Leaderboard shows per-asset and per-interval breakdown with no catastrophic weaknesses
 6. ✅ PM2 config and miner forward function are ready for mainnet deployment
 7. ✅ Synth API comparison shows model CRPS is below network median on ≥70% of assets
