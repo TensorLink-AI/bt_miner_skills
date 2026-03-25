@@ -53,8 +53,12 @@ def main() -> None:
             state = load_state(s.name)
             sn_label = f"SN{s.netuid}" if s.netuid else "no netuid"
             print(f"  {s.name} ({sn_label}):")
-            print(f"    Current phase: {state.current_phase}")
-            print(f"    Iterations: {state.iteration_count}")
+            print(f"    Mode: {state.mode}")
+            if state.mode == "build":
+                print(f"    Current phase: {state.current_phase}/8")
+            else:
+                print(f"    Maintain cycles: {state.maintain_cycle}")
+            print(f"    Total iterations: {state.iteration_count}")
             print(f"    Phase status: {state.phase_status}")
         return
 

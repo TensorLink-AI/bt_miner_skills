@@ -17,6 +17,9 @@ class PhaseState:
     conversation_history: list[dict] = field(default_factory=list)
     last_updated: float = 0.0
     iteration_count: int = 0
+    # Continuous operation — once build phases (1-8) are done, enters maintain mode
+    mode: str = "build"  # "build" (phases 1-8) or "maintain" (endless improvement)
+    maintain_cycle: int = 0  # how many maintain iterations have run
 
 
 def _state_path(skill_name: str) -> str:
