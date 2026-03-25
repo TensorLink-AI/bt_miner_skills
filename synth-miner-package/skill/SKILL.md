@@ -69,7 +69,7 @@ Before doing anything, read the appropriate reference files from `references/` r
 | **Checking live competition** | `synth_api.md` |
 | **Understanding data leakage risks** | `data_pipeline.md` (Section: Anti-Leakage) |
 | **Adding a new model architecture** | `models.md` (Section: Custom Models) |
-| **Training on remote GPU (Basilica)** | `basilica_gpu_training.md` |
+| **Training on remote GPU (Basilica)** | Install **basilica-cli-helper** external skill or use pre-installed `basilica-sdk` skill |
 
 ---
 
@@ -141,9 +141,7 @@ for model_config in search_space:
 
 ## Step 4: Run the Scripts
 
-The `scripts/` directory contains the implementation. Generate them using the reference files.
-
-### Key Scripts to Generate
+Generate the implementation scripts using the reference files. Key scripts to create:
 
 | Script | Purpose |
 |--------|---------|
@@ -180,6 +178,7 @@ Before deploying to mainnet, your model should:
 2. Show consistent performance across ALL assets (90th percentile penalty is brutal)
 3. Demonstrate stability over at least 48 hours of live-testing
 4. Not degrade significantly on any single CRPS interval bucket
+5. Be below the network median CRPS on ≥70% of assets (check via Synth API)
 
 ---
 
@@ -194,7 +193,6 @@ Before deploying to mainnet, your model should:
 # Max 8 decimal digits per price
 
 # For 1-hour challenge:
-# [start_timestamp, time_interval, [path1], [path2], ..., [path1000]]
 # Each path: 61 floats (1h / 1min + 1 = 61 points)
 
 response = [
@@ -251,4 +249,3 @@ Total data: 90 days of 1-min OHLCV
 | `references/leaderboard.md` | Tracking metrics, competitiveness analysis, per-asset/interval breakdown |
 | `references/deployment.md` | Model registry, hot-swap, PM2 config, production monitoring |
 | `references/synth_api.md` | Live leaderboard, miner validation, competitive benchmarking via Synth API |
-| `references/basilica_gpu_training.md` | Optional: train on decentralized GPUs via Basilica (SN39) |
