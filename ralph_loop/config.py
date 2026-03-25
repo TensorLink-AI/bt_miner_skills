@@ -9,7 +9,7 @@ load_dotenv(find_dotenv(usecwd=True), override=False)
 
 # Chutes AI configuration (OpenAI-compatible API)
 CHUTES_API_KEY = os.environ.get("CHUTES_API_KEY", "")
-CHUTES_BASE_URL = "https://api.chutes.ai/v1"
+CHUTES_BASE_URL = os.environ.get("CHUTES_BASE_URL", "https://llm.chutes.ai/v1")
 CHUTES_MODEL = os.environ.get("CHUTES_MODEL", "deepseek-ai/DeepSeek-V3-0324")
 
 # Loop configuration
