@@ -8,7 +8,7 @@ import logging
 import os
 import re
 
-from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT
+from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_URL
 from ralph_loop.executor import execute_response, get_workspace_snapshot
 from ralph_loop.llm import chat
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
@@ -19,13 +19,54 @@ logger = logging.getLogger(__name__)
 # Load the system prompt from the external markdown file
 _PROMPT_PATH = os.path.join(os.path.dirname(__file__), "RALPH_PROMPT.md")
 
+_COMMONS_REPO = "https://github.com/TensorLink-AI/the-commons"
+
+
+def _build_knowledge_prompt() -> str:
+    """Build the knowledge-sharing prompt, injecting connection details."""
+    parts = [
+        "## Knowledge Sharing — the-commons\n",
+        "Knowledge sharing is **enabled** for this session. You have access to",
+        "**the-commons**, a shared experiment log where agents record what they tried,",
+        "what worked, and what failed.\n",
+        "**Setup (first iteration only, if not already done):**",
+        f"1. Clone the repo into your workspace: `git clone {_COMMONS_REPO}`",
+        "2. Read `the-commons/skill/SKILL.md` to learn the available tools and how to use them.",
+        "3. Install its dependencies: `pip install -e the-commons` or `pip install mcp`\n",
+    ]
+
+    if COMMONS_URL:
+        parts.append(f"**Remote SSE server URL:** `{COMMONS_URL}`")
+        parts.append(
+            "Connect to this URL using the MCP SSE transport. "
+            "The server uses agent identification (pass your agent name in tool calls), "
+            "not bearer tokens.\n"
+        )
+
+    parts.extend([
+        "**Every iteration:**",
+        "- Before starting new work, query the commons for prior experiments on your task",
+        "  (use the `search`, `best`, and `failures` tools).",
+        "- After completing work, log your attempt (use the `log` tool) with what you",
+        "  tried, what happened, and an optional score.",
+        "- Rate useful entries from others when you encounter them.\n",
+        "The commons is a remote MCP server — read the skill doc for connection details",
+        "and tool signatures. Use it to avoid repeating known failures and to build on",
+        "what already works.",
+    ])
+    return "\n".join(parts)
+
 
 def _load_system_prompt() -> str:
     with open(_PROMPT_PATH, "r") as f:
         return f.read()
 
 
-def build_prompt(skill: SkillPackage, state: LoopState) -> list[dict]:
+def build_prompt(
+    skill: SkillPackage,
+    state: LoopState,
+    share_knowledge: bool = False,
+) -> list[dict]:
     """Build conversation messages for the next LLM iteration."""
     system_prompt = _load_system_prompt()
     messages = [{"role": "system", "content": system_prompt}]
@@ -37,6 +78,10 @@ def build_prompt(skill: SkillPackage, state: LoopState) -> list[dict]:
         f"## Agent Prompt (AGENT_PROMPT.md)\n{skill.agent_prompt}\n"
     )
     messages.append({"role": "user", "content": skill_context})
+
+    # Knowledge sharing prompt (if toggled on)
+    if share_knowledge:
+        messages.append({"role": "user", "content": _build_knowledge_prompt()})
 
     # Include requested references, or a default set on first iteration
     refs_to_include = state.requested_references if state.requested_references else []
@@ -94,7 +139,11 @@ def _parse_requested_refs(response: str) -> list[str]:
     return refs
 
 
-def run_skill_iteration(skill: SkillPackage, state: LoopState) -> LoopState:
+def run_skill_iteration(
+    skill: SkillPackage,
+    state: LoopState,
+    share_knowledge: bool = False,
+) -> LoopState:
     """Run one iteration of the loop for a single skill."""
     workspace_dir = state.workspace_dir or os.path.join(WORKSPACE_ROOT, skill.name)
     state.workspace_dir = workspace_dir
@@ -104,7 +153,7 @@ def run_skill_iteration(skill: SkillPackage, state: LoopState) -> LoopState:
         skill.name, state.iteration_count + 1,
     )
 
-    messages = build_prompt(skill, state)
+    messages = build_prompt(skill, state, share_knowledge=share_knowledge)
     response = chat(messages)
     logger.info("LLM response (%d chars):\n%s", len(response), response[:500])
 
@@ -127,7 +176,10 @@ def run_skill_iteration(skill: SkillPackage, state: LoopState) -> LoopState:
     return state
 
 
-def run_loop(filter_subnet: str | None = None) -> None:
+def run_loop(
+    filter_subnet: str | None = None,
+    share_knowledge: bool = False,
+) -> None:
     """Main ralph loop — discover skills and iterate forever."""
     skills = discover_skills(filter_subnet=filter_subnet)
     if not skills:
@@ -140,7 +192,9 @@ def run_loop(filter_subnet: str | None = None) -> None:
     while MAX_ITERATIONS == 0 or iteration < MAX_ITERATIONS:
         for skill in skills:
             state = load_state(skill.name)
-            state = run_skill_iteration(skill, state)
+            state = run_skill_iteration(
+                skill, state, share_knowledge=share_knowledge,
+            )
             save_state(skill.name, state)
 
         iteration += 1

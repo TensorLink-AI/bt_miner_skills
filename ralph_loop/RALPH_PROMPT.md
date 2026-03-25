@@ -80,6 +80,7 @@ Do NOT keep retrying the same failing command. Change your approach.
 Each iteration you get:
 - The skill package documentation (AGENT_PROMPT.md, SKILL.md)
 - Any reference files you requested (or that are relevant)
+- A **knowledge sharing** prompt (when `--share-knowledge` is enabled) telling you to download and use the-commons
 - Your recent conversation history
 - **Execution output** from last iteration (stdout, stderr, exit codes)
 - A snapshot of files currently in the workspace

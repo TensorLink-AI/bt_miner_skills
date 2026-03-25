@@ -28,3 +28,6 @@ WORKSPACE_ROOT = os.environ.get(
     "RALPH_WORKSPACE_ROOT",
     os.path.join(REPO_ROOT, "workspace"),
 )
+
+# the-commons knowledge sharing (MCP SSE transport)
+COMMONS_URL = os.environ.get("COMMONS_URL", "")  # e.g. http://localhost:8000/sse

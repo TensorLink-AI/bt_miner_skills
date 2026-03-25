@@ -29,6 +29,12 @@ def main() -> None:
         help="Target a specific subnet by netuid (e.g. 50), name (e.g. synth), "
              "or package name. Without this, all discovered skills run.",
     )
+    parser.add_argument(
+        "--share-knowledge", action="store_true",
+        help="Enable knowledge sharing via the-commons. Ralph will download "
+             "the skill from github.com/TensorLink-AI/the-commons and use it "
+             "to log experiments and learn from prior attempts.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -85,9 +91,16 @@ def main() -> None:
     print(f"Workspace root: {WORKSPACE_ROOT}")
     if args.subnet:
         print(f"Targeting subnet: {args.subnet}")
+    if args.share_knowledge:
+        from ralph_loop.config import COMMONS_URL
+        print("Knowledge sharing: ON (the-commons)")
+        if COMMONS_URL:
+            print(f"  Commons URL: {COMMONS_URL}")
+        else:
+            print("  No COMMONS_URL set — Ralph will clone the repo and run locally.")
 
     from ralph_loop.loop import run_loop
-    run_loop(filter_subnet=args.subnet)
+    run_loop(filter_subnet=args.subnet, share_knowledge=args.share_knowledge)
 
 
 if __name__ == "__main__":
