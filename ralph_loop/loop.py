@@ -8,7 +8,7 @@ import logging
 import os
 import re
 
-from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT
+from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_API_TOKEN, COMMONS_URL
 from ralph_loop.executor import execute_response, get_workspace_snapshot
 from ralph_loop.llm import chat
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
@@ -21,30 +21,41 @@ _PROMPT_PATH = os.path.join(os.path.dirname(__file__), "RALPH_PROMPT.md")
 
 _COMMONS_REPO = "https://github.com/TensorLink-AI/the-commons"
 
-KNOWLEDGE_SHARING_PROMPT = f"""\
-## Knowledge Sharing — the-commons
 
-Knowledge sharing is **enabled** for this session. You have access to
-**the-commons**, a shared experiment log where agents record what they tried,
-what worked, and what failed.
+def _build_knowledge_prompt() -> str:
+    """Build the knowledge-sharing prompt, injecting connection details."""
+    parts = [
+        "## Knowledge Sharing — the-commons\n",
+        "Knowledge sharing is **enabled** for this session. You have access to",
+        "**the-commons**, a shared experiment log where agents record what they tried,",
+        "what worked, and what failed.\n",
+        "**Setup (first iteration only, if not already done):**",
+        f"1. Clone the repo into your workspace: `git clone {_COMMONS_REPO}`",
+        "2. Read `the-commons/skill/SKILL.md` to learn the available tools and how to use them.",
+        "3. Install its dependencies: `pip install -e the-commons` or `pip install mcp`\n",
+    ]
 
-**Setup (first iteration only, if not already done):**
-1. Clone the repo into your workspace:
-   `git clone {_COMMONS_REPO}`
-2. Read `the-commons/skill/SKILL.md` to learn the available tools and how to use them.
-3. Install its dependencies: `pip install -e the-commons` or `pip install mcp`
+    if COMMONS_URL:
+        parts.append(f"**Remote server URL:** `{COMMONS_URL}`")
+    if COMMONS_API_TOKEN:
+        parts.append(f"**Bearer token for auth:** `{COMMONS_API_TOKEN}`")
+        parts.append(
+            "Include this token in requests as `Authorization: Bearer <token>` "
+            "or pass it via the `API_TOKEN` env var when starting the server.\n"
+        )
 
-**Every iteration:**
-- Before starting new work, query the commons for prior experiments on your task
-  (use the `search`, `best`, and `failures` tools).
-- After completing work, log your attempt (use the `log` tool) with what you
-  tried, what happened, and an optional score.
-- Rate useful entries from others when you encounter them.
-
-The commons is a remote MCP server — read the skill doc for connection details
-and tool signatures. Use it to avoid repeating known failures and to build on
-what already works.
-"""
+    parts.extend([
+        "**Every iteration:**",
+        "- Before starting new work, query the commons for prior experiments on your task",
+        "  (use the `search`, `best`, and `failures` tools).",
+        "- After completing work, log your attempt (use the `log` tool) with what you",
+        "  tried, what happened, and an optional score.",
+        "- Rate useful entries from others when you encounter them.\n",
+        "The commons is a remote MCP server — read the skill doc for connection details",
+        "and tool signatures. Use it to avoid repeating known failures and to build on",
+        "what already works.",
+    ])
+    return "\n".join(parts)
 
 
 def _load_system_prompt() -> str:
@@ -71,7 +82,7 @@ def build_prompt(
 
     # Knowledge sharing prompt (if toggled on)
     if share_knowledge:
-        messages.append({"role": "user", "content": KNOWLEDGE_SHARING_PROMPT})
+        messages.append({"role": "user", "content": _build_knowledge_prompt()})
 
     # Include requested references, or a default set on first iteration
     refs_to_include = state.requested_references if state.requested_references else []

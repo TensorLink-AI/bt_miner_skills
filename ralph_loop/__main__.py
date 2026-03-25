@@ -92,7 +92,16 @@ def main() -> None:
     if args.subnet:
         print(f"Targeting subnet: {args.subnet}")
     if args.share_knowledge:
+        from ralph_loop.config import COMMONS_API_TOKEN, COMMONS_URL
         print("Knowledge sharing: ON (the-commons)")
+        if COMMONS_URL:
+            print(f"  Commons URL: {COMMONS_URL}")
+        if not COMMONS_API_TOKEN:
+            print(
+                "  Warning: COMMONS_API_TOKEN not set in .env — "
+                "auth may be required by the remote server.",
+                file=sys.stderr,
+            )
 
     from ralph_loop.loop import run_loop
     run_loop(filter_subnet=args.subnet, share_knowledge=args.share_knowledge)

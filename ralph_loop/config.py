@@ -28,3 +28,7 @@ WORKSPACE_ROOT = os.environ.get(
     "RALPH_WORKSPACE_ROOT",
     os.path.join(REPO_ROOT, "workspace"),
 )
+
+# the-commons knowledge sharing
+COMMONS_API_TOKEN = os.environ.get("COMMONS_API_TOKEN", "")
+COMMONS_URL = os.environ.get("COMMONS_URL", "")  # e.g. https://commons.tensorlink.ai
