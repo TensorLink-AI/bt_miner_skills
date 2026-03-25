@@ -18,3 +18,9 @@ SKILLS_DIRS_PATTERN = "*-package"  # e.g. synth-miner-package
 
 # State persistence
 STATE_DIR = os.path.join(REPO_ROOT, ".ralph_state")
+
+# Workspace — where generated miner code is written and executed
+WORKSPACE_ROOT = os.environ.get(
+    "RALPH_WORKSPACE_ROOT",
+    os.path.join(REPO_ROOT, "workspace"),
+)
