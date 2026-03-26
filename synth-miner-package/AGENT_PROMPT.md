@@ -2,36 +2,32 @@
 
 ## Mission
 
-Build a competitive miner for the Synth Subnet (Bittensor SN50) that generates probabilistic
-price path forecasts scored by CRPS. Start from zero, end with a backtested model beating
-baseline by >15% on CRPS, validated by a local emulator that replicates exact validator scoring,
-and ready to deploy.
+Build and deploy a competitive miner for the Synth Subnet (Bittensor SN50) that generates
+probabilistic price path forecasts scored by CRPS. You start from zero. You're done when
+your miner is earning non-zero emissions on mainnet.
 
 ---
 
 ## Context
 
-Read the skill file at `skill/SKILL.md` first. It contains:
-- What the Synth subnet is and how it scores miners
-- The two competitions (24-hour and 1-hour HFT) and their specs
-- Asset weights, CRPS scoring intervals, and the score transformation pipeline
-- Anti-leakage rules for data handling
+Read `skill/SKILL.md` first — it defines the subnet, scoring mechanics, asset weights,
+CRPS intervals, and the score transformation pipeline.
 
-Then read the reference files in order as you need them (don't load all at once):
-- `skill/references/architecture.md` — system design and directory structure
-- `skill/references/data_pipeline.md` — data sourcing, features, temporal splits
-- `skill/references/models.md` — DLinear+Gaussian implementation, custom model interface
-- `skill/references/validator_emulator.md` — exact CRPS scoring logic
-- `skill/references/leaderboard.md` — tracking model competitiveness
-- `skill/references/deployment.md` — model registry and production deployment
-- `skill/references/synth_api.md` — live leaderboard and miner validation via Synth API
+Reference files in `skill/references/` contain implementation-level detail. Pull them in
+as needed — don't front-load everything:
+- `architecture.md` — system design and suggested directory structure
+- `data_pipeline.md` — data sourcing, features, temporal splits
+- `models.md` — DLinear+Gaussian reference implementation, custom model interface
+- `validator_emulator.md` — exact CRPS scoring logic
+- `leaderboard.md` — tracking model competitiveness
+- `deployment.md` — model registry and production deployment
+- `synth_api.md` — live leaderboard and miner validation via Synth API
 
 ---
 
 ## External Skills
 
-Some phases benefit from specialist skills maintained outside this package. When a phase
-references an external skill, install it before starting that phase.
+Some work benefits from specialist skills maintained outside this package.
 
 ### How to Install an External Skill
 
@@ -44,262 +40,69 @@ curl -L "<url>" -o <skill-name>.zip && unzip <skill-name>.zip -d <skill-name>/
 **If you're in Claude.ai (no shell for arbitrary downloads):**
 - Use `web_fetch` to read the skill's page directly from its URL
 - Extract the key instructions into your working context
-- You don't need to "install" anything — just read the content and follow it
 - For Basilica: the `basilica-sdk` skill is pre-installed at `/mnt/skills/user/basilica-sdk/`
 
 ### Available External Skills
 
-| Skill | Use In Phase | Source | Purpose |
-|-------|-------------|--------|---------|
-| **basilica-cli-helper** | Phase 5, 6 (if `COMPUTE_BACKEND=basilica`) | [mcpmarket.com/tools/skills/basilica-cli-helper](https://mcpmarket.com/tools/skills/basilica-cli-helper) | Basilica CLI commands (`basilica up`, `exec`, `cp`), SSH config, troubleshooting |
-| **basilica-sdk** | Phase 5, 6 (if `COMPUTE_BACKEND=basilica`) | Pre-installed at `/mnt/skills/user/basilica-sdk/` | Basilica Python SDK for deploying GPU workloads programmatically |
-| **bittensor-subnet-design** | Phase 8 (if customizing incentive mechanism) | Pre-installed at `/mnt/skills/user/bittensor-subnet-design/` | General Bittensor subnet design patterns, validator rules, CLI reference |
+| Skill | Purpose | Source |
+|-------|---------|--------|
+| **basilica-cli-helper** | Basilica CLI commands, SSH config, troubleshooting | [mcpmarket.com/tools/skills/basilica-cli-helper](https://mcpmarket.com/tools/skills/basilica-cli-helper) |
+| **basilica-sdk** | Basilica Python SDK for deploying GPU workloads | Pre-installed at `/mnt/skills/user/basilica-sdk/` |
+| **bittensor-subnet-design** | Bittensor subnet design patterns, validator rules, CLI reference | Pre-installed at `/mnt/skills/user/bittensor-subnet-design/` |
 
-### Adding More External Skills
-
-To plug in another skill, add a row to the table above and reference it from the relevant
-phase. The agent fetches it (or reads via web_fetch) and follows its SKILL.md.
+If using Basilica for GPU compute, only use cheap GPUs (A4000, V100, L40). Do NOT use
+A100, H100, A6000, or other expensive instances.
 
 ---
 
-## Phases
+## Principles
 
-Work through these phases sequentially. Each phase has a **gate** — a concrete check you must
-pass before moving on. If a gate fails, fix the issue before proceeding.
+These guide every decision you make. They're not suggestions.
 
-### Phase 1: Scaffold
-**Goal**: Set up the project structure and install dependencies.
+### 1. Verify Against Reality
 
-1. Create the directory structure from `skill/references/architecture.md`
-2. Set up a Python virtual environment with PyTorch, pandas, numpy, requests
-3. Create `config.py` with all constants from the SKILL.md:
-   - All 9 assets and their weights
-   - Both challenge types (24h and 1h) with their interval definitions
-   - CRPS scoring parameters (softmax beta, rolling window, etc.)
-   - Pyth Oracle price IDs
-   - Binance symbol mappings
-   - Basilica GPU configuration:
-     ```python
-     COMPUTE_BACKEND = "local"  # "local" or "basilica"
-     BASILICA_GPU_TYPE = "A4000"  # Allowed: "A4000", "V100", "L40" (cheap GPUs only)
-     BASILICA_ALLOWED_GPUS = ["A4000", "V100", "L40"]
-     ```
+Never trust your own scoring. Before making any deployment decision, cross-check your
+emulator output against live network scores from the Synth API. If your CRPS values are
+a different order of magnitude from the network, your emulator is wrong — fix it before
+training more models.
 
-**Gate**: `python -c "from config import ASSETS_24H, ASSET_WEIGHTS, INTERVALS_24H; print('OK')"` succeeds.
+Concretely: fetch `GET /validation/scores/latest?asset=BTC&time_length=86400` and compare.
+If live scores are ~150 and yours are ~15,000, your basis point conversion is broken.
 
-### Phase 2: Data Pipeline
-**Goal**: Fetch historical data and create walk-forward splits with anti-leakage guarantees.
+### 2. Parameters Change
 
-1. Read `skill/references/data_pipeline.md` thoroughly
-2. Implement `data_pipeline.py`:
-   - Fetch 90 days of 1-minute OHLCV from Binance for BTC, ETH, SOL
-   - For XAU, use PAXGUSDT as proxy
-   - For equity assets (SPYX, NVDAX, TSLAX, AAPLX, GOOGLX), use yfinance for SPY, NVDA, TSLA, AAPL, GOOGL
-   - Handle market hours gaps for equities
-3. Implement causal feature computation (every feature uses `.shift(1)` — NO EXCEPTIONS):
-   - Returns in basis points at multiple horizons
-   - Realized volatility at multiple windows
-   - VWAP deviation, high-low range, volume ratio
-   - Cyclical time encoding (hour, day of week)
-4. Create walk-forward folds with purge gaps:
-   - Minimum 5 folds
-   - Purge gap = forecast horizon + 2h buffer
-   - Final held-out test set = last 20 days
-5. Save processed data as parquet files
+Before relying on hardcoded asset weights, interval definitions, or scoring parameters
+(especially the softmax β), verify them against the current validator source at
+https://github.com/mode-network/synth-subnet. The skill's reference values may be outdated.
 
-**Gate**: Run these checks and all must pass:
-- No NaN values in any feature columns
-- All timestamps are UTC and monotonically increasing
-- Verify anti-leakage: for each fold, `train.timestamp.max() + purge_gap <= val.timestamp.min()`
-- At least 50,000 rows per asset in training data
-- Print fold summary: train size, val size, date ranges
+### 3. Anti-Leakage Is Non-Negotiable
 
-### Phase 3: Model — DLinear + Gaussian Head
-**Goal**: Implement the default model and verify it produces valid outputs.
+Every feature must be causal (`.shift(1)` or equivalent). Every split must be temporal
+with purge gaps. Walk-forward validation only — no random splits, no shuffling. If you're
+unsure whether something leaks, it leaks. Fix it.
 
-1. Read `skill/references/models.md`
-2. Implement `models/base_model.py` — the abstract interface
-3. Implement `models/dlinear_gaussian.py` — the full DLinear + Gaussian model:
-   - MovingAvgBlock with causal padding
-   - Trend/seasonal decomposition
-   - Linear projections to forecast horizon
-   - μ head and σ head (σ uses sigmoid bounded between min_sigma and max_sigma)
-   - `sample_paths()` method that generates N=1000 price paths
-4. Implement both loss functions:
-   - `CRPSLoss` — closed-form Gaussian CRPS (use this as primary training loss)
-   - `GaussianNLLLoss` — negative log-likelihood (use as secondary/comparison)
-5. Write a unit test that verifies shapes and constraints
+### 4. The Baseline Is a Floor, Not a Ceiling
 
-**Gate**:
-- Model forward pass produces `(mu, sigma)` with correct shapes `[batch, horizon]`
-- `sigma` is always positive (min_sigma ≤ σ ≤ max_sigma)
-- `sample_paths()` returns `[batch, 1000, horizon+1]` with all positive values
-- First price in every path equals `current_price`
-- No NaN or Inf in any output
+DLinear + Gaussian is a minimal viable model — fast to implement, good enough to validate
+the pipeline end-to-end. Read `skill/references/models.md` for the reference implementation.
+Get it working, verify the full pipeline with it, then move on to better approaches quickly.
 
-### Phase 4: Validator Emulator
-**Goal**: Implement exact CRPS scoring that matches the real validator.
+**Once you have a working pipeline validated against the Synth API, spend most of your
+effort on model improvement, not infrastructure polish.** The DLinear baseline exists so
+you can validate your emulator and data pipeline quickly — it is not expected to be
+competitive on mainnet.
 
-1. Read `skill/references/validator_emulator.md` carefully
-2. Implement `evaluation/crps.py`:
-   - `crps_ensemble()` for single observation
-   - `crps_ensemble_vectorized()` for multiple timesteps
-3. Implement `evaluation/validator_emulator.py`:
-   - `paths_to_bps_changes()` — convert price paths to basis point changes
-   - `actual_to_bps_changes()` — convert actual prices to basis point changes
-   - `score_prediction()` — full scoring across all interval buckets
-   - `transform_scores()` — percentile capping, best subtraction
-   - `rolling_average()` — weighted 10-day rolling average
-   - `calculate_emission_share()` — softmax with β = -0.0475
-4. Implement baselines for comparison:
-   - GBM (Geometric Brownian Motion) baseline
-   - Historical simulation baseline
-5. Write validation tests:
-   - Construct a known scenario where CRPS can be hand-calculated
-   - Verify basis point conversion is correct
-   - Verify interval bucketing matches expected counts (288×5min, 48×30min, 8×3hr)
-
-**Gate**:
-- CRPS of a perfect prediction (all paths = actual) is approximately 0
-- CRPS increases as predictions diverge from actual
-- Narrower ensemble has lower CRPS when centered on truth, higher when off-center
-- Interval counts match exactly: 288 + 48 + 8 + 1 = 345 CRPS values for 24h
-- Basis point conversion test: price change from 100000 to 102000 = 200 bps ✓
-- **Synth API cross-check**: Read `skill/references/synth_api.md`, then fetch
-  `GET https://api.synthdata.co/validation/scores/latest?asset=BTC&time_length=86400`
-  to see real CRPS values from the live network. Verify your emulator's output is in the
-  same ballpark (same order of magnitude). If live scores are ~150 and yours are ~15000,
-  your basis point conversion is wrong.
-
-### Phase 5: Training Loop
-**Goal**: Train the DLinear model across all assets using walk-forward validation.
-
-**Compute option**: Check `config.py` for `COMPUTE_BACKEND`. If set to `"basilica"`:
-- Install the **basilica-cli-helper** external skill, or in Claude read the pre-installed
-  `basilica-sdk` skill at `/mnt/skills/user/basilica-sdk/`
-- Deploy training to Basilica GPU instances instead of running locally
-If `"local"` (default), run everything on the local machine.
-
-1. Implement `training/train.py`:
-   - DataLoader creation from walk-forward folds
-   - Training loop with CRPS loss
-   - AdamW optimizer with cosine annealing
-   - Gradient clipping (max_norm=1.0)
-   - Early stopping (patience=10)
-   - Save best model per fold
-2. If using Basilica:
-   - Upload processed data to a Basilica Volume
-   - Deploy a GPU training job using `basilica-sdk`, specifying `gpu_type=config.BASILICA_GPU_TYPE`
-   - Only use cheap GPUs from `BASILICA_ALLOWED_GPUS` (A4000, V100, L40) — do NOT use
-     expensive GPUs like A100, H100, A6000, etc.
-   - Validate that `BASILICA_GPU_TYPE in BASILICA_ALLOWED_GPUS` before deploying
-   - Monitor training via `deployment.logs()`
-   - Download results from the Volume when complete
-3. If local: train on each fold for each asset directly
-4. After training, generate 1000-path predictions on each validation fold
-5. Score using the validator emulator
-6. Also score the GBM and historical simulation baselines on the same data
-
-**Gate**:
-- Training loss decreases over epochs (not diverging)
-- Validation CRPS is finite and reasonable (not 0, not infinity)
-- Model predictions for all 9 assets produce valid paths
-- DLinear CRPS < GBM baseline CRPS (if not, debug before proceeding)
-- Print per-asset CRPS comparison table: DLinear vs GBM vs HistSim
-
-### Phase 6: Leaderboard & Search
-**Goal**: Track results and run automated model search to find competitive configs.
-
-1. Read `skill/references/leaderboard.md`
-2. Implement `evaluation/leaderboard.py` with SQLite tracking
-3. Log all training results to the leaderboard
-4. Implement `training/search.py`:
-   - Define search space (lookback, kernel_size, min/max_sigma, lr, batch_size)
-   - Random search over 20-30 configurations
-   - For each config, run full walk-forward training + emulator scoring
-   - Log everything to leaderboard
-   - If `COMPUTE_BACKEND == "basilica"`: deploy the search as a single GPU job that
-     iterates through all configs. Use `gpu_type=config.BASILICA_GPU_TYPE` (must be one
-     of A4000, V100, L40 — cheap GPUs only). Use a Basilica Volume for checkpoints so
-     partial results survive if the job times out. Set `ttl_seconds=14400` (4 hours).
-5. After search completes, analyze results:
-   - Which configs beat baseline by >15%?
-   - Which assets are weakest across all configs?
-   - Is 5-min, 30-min, or 3-hr interval the hardest?
-   - What's the simulated emission share of the best model?
-
-**Gate**:
-- At least 20 model configs evaluated
-- Best model beats GBM by >15% on rolling average CRPS
-- Leaderboard comparison table generated showing all models ranked
-- Per-asset heatmap shows no single asset contributing >30% of total CRPS
-- If no model beats baseline by 15%, expand search space and retry
-- **Synth API benchmark**: Fetch live scores from `GET /validation/scores/latest` for each
-  asset. Compare your best model's CRPS against the network median. Print a side-by-side
-  table: your CRPS vs live best / median / p25. You should be below the median on most
-  assets to have a shot at positive emissions.
-
-### Phase 7: Live Testing
-**Goal**: Run the best model against live price data to validate real-world performance.
-
-1. Implement `evaluation/live_tester.py`:
-   - Connect to Pyth Oracle for live prices
-   - Every 30 minutes, generate predictions for each asset
-   - Wait for the forecast horizon to elapse
-   - Score predictions using the emulator
-   - Log to leaderboard with `is_live=True`
-2. Run for minimum 4 hours (8 prompt cycles) — ideally 48 hours
-3. Compare live CRPS to backtest CRPS
-4. If live CRPS is >20% worse than backtest, investigate:
-   - Data distribution shift?
-   - Feature computation bug in live mode?
-   - Pyth vs Binance price discrepancy?
-
-**Gate**:
-- Live predictions are valid format for all tested assets
-- Live CRPS within 20% of backtest CRPS
-- No errors or timeouts in any prediction cycle
-- Response time < 30 seconds per prediction
-- **Competitiveness gate (required before deployment)**:
-  - Fetch current network scores: `GET /validation/scores/latest` for each asset/interval
-  - Compare your live CRPS against active miners' scores on the network
-  - Your model must score below the network **median CRPS on ≥70% of asset/interval pairs**
-  - Print a ranked comparison table: your CRPS vs network p25 / median / p75 for each asset
-  - If you fail this gate, do NOT proceed to Phase 8. Instead:
-    1. Log which assets/intervals are weakest relative to the network
-    2. Return to Phase 5 or 6 to retrain or search for better configs targeting those weak spots
-    3. Re-run live testing after improvements
-  - This gate ensures you only deploy a model that would actually earn positive emissions
-
-### Phase 8: Deployment Preparation
-**Goal**: Set up model registry and deployment infrastructure.
-
-1. Read `skill/references/deployment.md`
-2. Implement `deployment/model_registry.py`:
-   - Register best model as candidate
-   - Promote through stages: candidate → live_testing → production
-   - Symlink-based current model pointer
-3. Implement `miner/forward.py`:
-   - Load production model from registry
-   - Hot-swap detection (check symlink on each request)
-   - Response formatting matching validator expectations
-4. Implement `miner/response_formatter.py`:
-   - Correct format: `[timestamp, interval, path1, path2, ..., path1000]`
-   - Round to 8 decimal places
-   - Validate path lengths (289 for 24h, 61 for 1h)
-5. Create PM2 config for production miner
-
-**Gate**:
-- Model registry has at least one model in "production" stage
-- Response formatter produces correctly formatted output
-- Path lengths are exactly correct (289 or 61)
-- All prices rounded to ≤8 decimal places
-- First price in each path matches current_price
-- **Post-deployment check** (if miner UID is known): Use the Synth API to verify:
-  - `GET /validation/miner?uid=<YOUR_UID>` returns `"validated": true`
-  - `GET /v2/leaderboard/latest` shows your UID with non-zero rewards
-  - `GET /validation/scores/latest?miner_uid=<YOUR_UID>` shows CRPS scores being recorded
-  - If validation fails, the `reason` field tells you exactly what's wrong with your format
+The real competitive edge comes from:
+- **Distribution choice**: Gaussian is provably suboptimal for CRPS at longer intervals
+  because crypto returns are fat-tailed. Student-t distributions capture tail behavior
+  with a single extra parameter (degrees of freedom ν). Mixture density networks can model
+  multimodal outcomes. Either is a significant CRPS improvement over Gaussian at 3hr+ horizons.
+- **Feature engineering**: Regime-aware features, cross-asset signals, volatility term
+  structure.
+- **Uncertainty scaling**: Uncertainty should grow with forecast horizon — a fixed σ across
+  all intervals is leaving CRPS on the table.
+- **Equity asset handling**: Getting clean data and handling market hours correctly is a
+  real differentiator since many miners do this poorly.
 
 ---
 
@@ -325,26 +128,142 @@ If `"local"` (default), run everything on the local machine.
 
 ---
 
+## What to Build
+
+The work breaks into three layers: foundations that must be correct before anything else,
+the iterative development loop you drive autonomously, and deployment readiness checks.
+
+### Non-Negotiable Foundations
+
+These must be built and validated first because everything downstream depends on their
+correctness. Order between them is up to you, but both must be solid before you trust
+any model evaluation result.
+
+**Data Pipeline**
+- Fetch historical OHLCV data for all 9 assets (see `skill/references/data_pipeline.md`)
+- Compute causal features (all shifted, no exceptions)
+- Create walk-forward splits with purge gaps (expanding window, temporal only)
+- Save processed data in a reusable format
+
+**Equity data — know this going in**: yfinance only provides 1-minute data for ~7-30 days.
+For 90-day backtests, you'll need to use daily data and resample, find an alternative
+source, or adjust your backtest window for equities. Don't discover this after building
+your whole pipeline assuming 90 days of minute data exists.
+
+**Market hours gaps**: Equity assets don't trade 24/7. You need a concrete strategy —
+forward-fill during closed hours, mask scoring during gaps, or interpolate. This is a
+real source of bugs that will make your emulator scores wrong for equities if unhandled.
+
+**Validator Emulator**
+- Implement exact CRPS scoring matching the real validator (see `skill/references/validator_emulator.md`)
+- Basis point conversion, interval bucketing, score transformation, rolling averages
+- Implement GBM and historical simulation baselines for comparison
+
+**Verify before trusting**: Your emulator's CRPS output must be in the same order of
+magnitude as live network scores. Check via Synth API (`/validation/scores/latest`). If
+they diverge by 10x+, your emulator is wrong. Fix it before training any models — every
+evaluation result from a broken emulator is garbage.
+
+### The Development Loop
+
+Once foundations are solid, you enter the core cycle: **train → evaluate → improve**.
+There is no fixed number of iterations or prescribed search space. You drive this loop
+autonomously.
+
+Each iteration:
+1. **Train** a model on your walk-forward folds
+2. **Evaluate** using your emulator — score CRPS across all assets and intervals
+3. **Compare** against baselines (GBM, historical sim) and against live network scores
+   from the Synth API
+4. **Identify weaknesses** — which assets, which intervals, which conditions are worst?
+5. **Improve** — change the model, the features, the distribution, the hyperparameters,
+   or the data processing based on what you learned
+
+You decide when to:
+- Try a new architecture vs. tune the current one
+- Expand the hyperparameter search vs. fix a data issue
+- Focus on a specific weak asset vs. improve across the board
+- Move from Gaussian to a heavier-tailed distribution
+
+**Track everything.** Use a leaderboard (see `skill/references/leaderboard.md`) to log
+every experiment with its config and scores. You'll need this to understand what's working.
+
+**Benchmark against the network regularly.** Fetch live scores from the Synth API and
+compare your best model's CRPS against the network median. You should be below the median
+on most assets to have a shot at positive emissions.
+
+**The Pyth/Binance gap**: Training data comes from Binance, but live scoring uses Pyth
+Oracle prices. There can be meaningful differences, especially during volatile periods.
+If your live CRPS is significantly worse than backtest CRPS, this is one of the first
+things to investigate.
+
+### Deployment Readiness
+
+Before going to mainnet, these checks must all pass. They're strict because a bad
+deployment wastes emissions and compute.
+
+**Model quality:**
+- Your best model beats GBM baseline on CRPS across the asset-weighted average
+- Live CRPS (tested against real price feeds) is in the same ballpark as backtest CRPS
+- Synth API comparison shows your CRPS is below the network median on the majority of
+  asset/interval pairs
+
+**Output correctness:**
+- Predictions produce exactly 1000 paths per asset per interval
+- Path lengths are exactly correct (289 for 24h, 61 for 1h)
+- All prices rounded to ≤8 decimal places
+- First price in each path equals current_price
+- Response format matches validator expectations exactly
+
+**Infrastructure:**
+- Model registry has a model promoted to production
+- Miner forward function loads the production model and formats responses correctly
+- Hot-swap support so you can update models without restarting
+
+**Post-deployment verification:**
+- `GET /validation/miner?uid=<YOUR_UID>` returns `"validated": true`
+- `GET /v2/leaderboard/latest` shows your UID with non-zero rewards
+- If validation fails, the `reason` field tells you exactly what's wrong
+
+---
+
 ## When Stuck
 
-- If data fetching fails: Check Binance API rate limits (1200 req/min). Add sleep(0.1) between requests.
-- If CRPS is NaN: Check for zero or negative sigma values. Check for price = 0 in bps calculation.
-- If model doesn't improve over baseline: The Gaussian head might be too thin-tailed. Try increasing max_sigma or switching to a Student-t distribution.
-- If live CRPS ≫ backtest CRPS: Most likely a feature leakage bug that only manifests in live mode. Check that live feature computation is identical to training.
-- If equity asset data has gaps: That's normal (market hours). Fill gaps with last known price or interpolate, but flag these periods in your scoring.
+- **Data fetching fails**: Check Binance API rate limits (1200 req/min). Add sleep(0.1)
+  between requests.
+- **CRPS is NaN**: Check for zero or negative sigma values. Check for price = 0 in bps
+  calculation.
+- **Model doesn't improve over baseline**: The Gaussian head is probably too thin-tailed.
+  Crypto returns have excess kurtosis — a Student-t distribution with learnable degrees of
+  freedom ν (constrained to ν > 2 for finite variance) directly addresses this. Alternatively,
+  a mixture of 2-3 Gaussians can capture multimodal outcomes. Either approach should show
+  immediate CRPS improvement at 3hr+ intervals where tail behavior matters most.
+- **Live CRPS ≫ backtest CRPS**: Three likely causes in order of probability: (1) feature
+  leakage bug that only manifests in live mode — check that live feature computation is
+  identical to training; (2) Pyth vs Binance price discrepancy — compare the price feeds
+  directly during a test window; (3) regime shift — retrain on more recent data.
+- **Equity asset data has gaps**: That's normal (market hours). You must handle this
+  explicitly. Forward-fill is the simplest approach, but flag these periods so you can
+  analyze whether gap handling is hurting your scores. Consider masking equity CRPS during
+  market-closed periods in your internal evaluation to get cleaner signal.
+- **yfinance doesn't have enough minute data**: Expected. For equities, either use daily
+  OHLCV and resample to your needed frequency, use an alternative data source (Alpha Vantage,
+  Polygon.io), or shorten the backtest window for equity assets specifically.
 
 ---
 
 ## Definition of Done
 
-The task is complete when:
-1. ✅ All 8 phase gates pass
-2. ✅ A model is registered in the model registry at "production" stage
-3. ✅ The model beats GBM baseline by >15% on CRPS across all assets
-4. ✅ Live testing shows CRPS within 20% of backtest AND below network median on ≥70% of asset/interval pairs
-5. ✅ Leaderboard shows per-asset and per-interval breakdown with no catastrophic weaknesses
-6. ✅ PM2 config and miner forward function are ready for mainnet deployment
-7. ✅ Synth API comparison shows model CRPS is below network median on ≥70% of assets
-8. ✅ A summary report is generated showing: best model config, CRPS comparison vs baselines,
-   CRPS comparison vs live network (from Synth API), per-asset breakdown, estimated
-   emission share, and known weaknesses to improve next
+You're done when your miner is deployed to mainnet, validated by the Synth API
+(`/validation/miner?uid=<YOUR_UID>` returns `validated: true`), and earning non-zero
+emissions visible on the leaderboard. Everything before that is iteration.
+
+Intermediate signals that you're on track (check these, but they don't mean "done"):
+- Your best model beats GBM baseline by a meaningful margin on CRPS
+- Synth API comparison shows you below the network median on most asset/interval pairs
+- Live testing shows no catastrophic divergence from backtest performance
+- No single asset contributes a disproportionate share of your total CRPS error
+
+Generate a summary report when deploying: best model config, CRPS vs baselines, CRPS vs
+live network (from Synth API), per-asset breakdown, estimated emission share, and known
+weaknesses to improve next.
