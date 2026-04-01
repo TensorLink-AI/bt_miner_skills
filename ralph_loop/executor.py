@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
-EXECUTION_TIMEOUT = 120  # seconds per command
+EXECUTION_TIMEOUT = 600  # seconds per command (increased for Basilica job deployment/monitoring)
 MAX_OUTPUT_CHARS = 8000  # truncate captured output beyond this
 
 

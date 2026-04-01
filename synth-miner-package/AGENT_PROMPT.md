@@ -108,6 +108,12 @@ The real competitive edge comes from:
 
 ## Critical Rules (Never Violate These)
 
+0. **No local training** — NEVER run PyTorch model training, hyperparameter search, or any
+   GPU-intensive workload on the local machine. The sandbox has limited CPU and no GPU — training
+   locally WILL crash the session. Always use `COMPUTE_BACKEND = "basilica"` and offload training
+   to Basilica GPU instances. Data pipeline, feature engineering, and lightweight operations
+   (scoring, formatting, file I/O) are fine to run locally.
+
 1. **No data leakage** — Every feature computation must use `.shift(1)` or equivalent. Every
    split must be temporal with purge gaps. If you're unsure whether something leaks, it leaks.
    Fix it.
@@ -170,8 +176,13 @@ Once foundations are solid, you enter the core cycle: **train → evaluate → i
 There is no fixed number of iterations or prescribed search space. You drive this loop
 autonomously.
 
+**Compute**: All training MUST run on Basilica (`COMPUTE_BACKEND = "basilica"`). The local
+sandbox has no GPU and limited CPU — training locally will crash the session. Use the
+`basilica-sdk` skill to deploy GPU jobs (A4000, V100, or L40 only). Data pipeline work,
+feature engineering, scoring, and evaluation are fine to run locally.
+
 Each iteration:
-1. **Train** a model on your walk-forward folds
+1. **Train** a model on your walk-forward folds (on Basilica, not locally)
 2. **Evaluate** using your emulator — score CRPS across all assets and intervals
 3. **Compare** against baselines (GBM, historical sim) and against live network scores
    from the Synth API
