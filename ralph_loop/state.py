@@ -9,6 +9,23 @@ from ralph_loop.config import STATE_DIR
 
 
 @dataclass
+class BacktestResult:
+    """A single backtest evidence record."""
+
+    iteration: int = 0
+    timestamp: float = 0.0
+    model_name: str = ""
+    crps_scores: dict = field(default_factory=dict)  # asset -> score
+    crps_overall: float = 0.0
+    baseline_comparison: dict = field(default_factory=dict)  # baseline_name -> score
+    synth_api_compared: bool = False
+    live_crps: dict = field(default_factory=dict)  # from Synth API comparison
+    assets_evaluated: list[str] = field(default_factory=list)
+    intervals_evaluated: list[str] = field(default_factory=list)
+    raw_output: str = ""  # the execution output that produced this evidence
+
+
+@dataclass
 class LoopState:
     """Tracks progress for a skill — adaptive, no rigid phases."""
 
@@ -21,6 +38,15 @@ class LoopState:
     requested_references: list[str] = field(default_factory=list)
     workspace_dir: str = ""
     last_updated: float = 0.0
+
+    # Backtest evidence tracking
+    backtest_results: list[dict] = field(default_factory=list)
+    best_crps_overall: float = 0.0
+    has_validated_emulator: bool = False
+    has_backtest_scores: bool = False
+    has_baseline_comparison: bool = False
+    has_synth_api_check: bool = False
+    deployment_ready: bool = False
 
 
 def _state_path(skill_name: str) -> str:

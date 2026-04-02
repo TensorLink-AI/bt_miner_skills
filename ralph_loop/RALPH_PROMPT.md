@@ -64,6 +64,45 @@ You can request multiple files, one per line.
 - **Read the execution output.** It's there for a reason — use it to decide what to do next.
 - **The skill package is guidance, not gospel.** The phased plan in AGENT_PROMPT.md suggests an order, but you can adapt, reorder, skip, or try different approaches based on what you see working.
 
+## Backtest Evidence Requirements
+
+**Writing code is not the same as having a working pipeline.** Your progress is measured by
+executed backtests with real numeric results, not by files written.
+
+The system tracks a **Backtest Evidence Tracker** that monitors your execution output for
+actual CRPS scores. You will see it in your state context. Pay attention to it.
+
+**Evidence gates — you CANNOT claim deployment readiness until ALL of these are met:**
+
+1. **Backtest scores**: Your validator emulator must produce actual numeric CRPS scores
+   from execution output (not just code that could produce them — EXECUTED code with
+   PRINTED scores).
+2. **Per-asset coverage**: CRPS scores for all 9 assets, not just BTC/ETH.
+3. **Baseline comparison**: Your model's CRPS compared numerically against GBM and/or
+   historical simulation baselines — printed in execution output.
+4. **Synth API cross-check**: Fetch live network scores and compare your emulator output.
+   Print the comparison.
+5. **Emulator validation**: Demonstrate your emulator scores are in the same order of
+   magnitude as live network scores.
+
+**If you claim "ready to deploy" or "pipeline complete" without these evidence gates being
+met, the system will block you and redirect you to run actual backtests.**
+
+**Best practice**: After every training run, print a structured results block like:
+```
+=== BACKTEST RESULTS ===
+Model: <name>
+Overall CRPS: <value>
+BTC CRPS: <value>
+ETH CRPS: <value>
+... (all assets)
+GBM baseline CRPS: <value>
+Model vs baseline: <comparison>
+=== END RESULTS ===
+```
+
+This ensures the evidence tracker can detect your results.
+
 ## When Stuck
 
 If you see the same error 3+ times:
