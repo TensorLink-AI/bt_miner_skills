@@ -10,6 +10,24 @@ Your response is parsed for fenced code blocks. They run in this order:
 2. **`python`** blocks are written to files. The **first line must be** `# FILENAME: path/relative/to/workspace.py` — that line is consumed and the rest is written to disk.
 3. **`run`** blocks execute last (use for: running scripts you just wrote, tests, validations)
 
+### Basilica GPU Tools (Function Calling)
+
+You also have access to **Basilica tool calls** for GPU training. These are preferred over
+trying to run training locally (which will be blocked).
+
+| Tool | Purpose |
+|------|---------|
+| `basilica_submit_job` | Submit a training script to run on a remote GPU (A4000, V100, L40) |
+| `basilica_check_job` | Check status of a submitted job (queued/running/completed/failed) |
+| `basilica_fetch_results` | Download results (model checkpoints, scores) from a completed job |
+| `basilica_list_jobs` | List your recent jobs and their statuses |
+
+**IMPORTANT — Local training is blocked:**
+- Commands that appear to run PyTorch training locally (e.g. `python train.py` with
+  backward passes, optimizer steps) will be automatically blocked.
+- Always use `basilica_submit_job` for any model training or hyperparameter search.
+- Data pipeline, feature engineering, scoring, and evaluation are fine to run locally.
+
 Example:
 
 ~~~
@@ -63,6 +81,45 @@ You can request multiple files, one per line.
 - **Verify before building on top.** Run tests or checks before assuming prior work is solid.
 - **Read the execution output.** It's there for a reason — use it to decide what to do next.
 - **The skill package is guidance, not gospel.** The phased plan in AGENT_PROMPT.md suggests an order, but you can adapt, reorder, skip, or try different approaches based on what you see working.
+
+## Backtest Evidence Requirements
+
+**Writing code is not the same as having a working pipeline.** Your progress is measured by
+executed backtests with real numeric results, not by files written.
+
+The system tracks a **Backtest Evidence Tracker** that monitors your execution output for
+actual CRPS scores. You will see it in your state context. Pay attention to it.
+
+**Evidence gates — you CANNOT claim deployment readiness until ALL of these are met:**
+
+1. **Backtest scores**: Your validator emulator must produce actual numeric CRPS scores
+   from execution output (not just code that could produce them — EXECUTED code with
+   PRINTED scores).
+2. **Per-asset coverage**: CRPS scores for all 9 assets, not just BTC/ETH.
+3. **Baseline comparison**: Your model's CRPS compared numerically against GBM and/or
+   historical simulation baselines — printed in execution output.
+4. **Synth API cross-check**: Fetch live network scores and compare your emulator output.
+   Print the comparison.
+5. **Emulator validation**: Demonstrate your emulator scores are in the same order of
+   magnitude as live network scores.
+
+**If you claim "ready to deploy" or "pipeline complete" without these evidence gates being
+met, the system will block you and redirect you to run actual backtests.**
+
+**Best practice**: After every training run, print a structured results block like:
+```
+=== BACKTEST RESULTS ===
+Model: <name>
+Overall CRPS: <value>
+BTC CRPS: <value>
+ETH CRPS: <value>
+... (all assets)
+GBM baseline CRPS: <value>
+Model vs baseline: <comparison>
+=== END RESULTS ===
+```
+
+This ensures the evidence tracker can detect your results.
 
 ## When Stuck
 

@@ -1,7 +1,13 @@
-"""Chutes AI LLM inference via OpenAI-compatible API."""
+"""Chutes AI LLM inference via OpenAI-compatible API.
 
+Supports both plain chat completions and tool/function calling for
+Basilica GPU operations.
+"""
+
+import json
 import logging
 import time
+from dataclasses import dataclass, field
 
 from openai import OpenAI, NotFoundError
 
@@ -11,6 +17,18 @@ logger = logging.getLogger(__name__)
 
 _MAX_RETRIES = 5
 _RETRY_BASE_DELAY = 5  # seconds; doubles each attempt
+
+
+@dataclass
+class LLMResponse:
+    """Structured response from the LLM, supporting both text and tool calls."""
+
+    content: str = ""
+    tool_calls: list[dict] = field(default_factory=list)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return len(self.tool_calls) > 0
 
 
 def get_client() -> OpenAI:
@@ -28,26 +46,70 @@ def chat(
     model: str = CHUTES_MODEL,
     max_tokens: int = MAX_TOKENS_PER_TURN,
 ) -> str:
-    """Send a chat completion request to Chutes AI and return the response text.
+    """Send a plain chat completion request. Returns text only.
 
-    Retries with exponential backoff on 404 errors, which occur transiently
-    when a chute instance is not yet available.
+    Kept for backwards compatibility.
+    """
+    response = chat_with_tools(messages, tools=None, model=model, max_tokens=max_tokens)
+    return response.content
+
+
+def chat_with_tools(
+    messages: list[dict],
+    tools: list[dict] | None = None,
+    model: str = CHUTES_MODEL,
+    max_tokens: int = MAX_TOKENS_PER_TURN,
+) -> LLMResponse:
+    """Send a chat completion request with optional tool definitions.
+
+    Returns an LLMResponse with text content and/or tool calls.
     """
     client = get_client()
-    logger.info("Sending request to Chutes AI (model=%s, messages=%d)", model, len(messages))
+    logger.info(
+        "Sending request to Chutes AI (model=%s, messages=%d, tools=%d)",
+        model, len(messages), len(tools) if tools else 0,
+    )
+
+    kwargs = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": 0.7,
+    }
+
+    if tools:
+        kwargs["tools"] = tools
+        # Allow the model to choose between text and tool calls
+        kwargs["tool_choice"] = "auto"
 
     last_err = None
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=0.7,
+            response = client.chat.completions.create(**kwargs)
+            message = response.choices[0].message
+
+            result = LLMResponse(content=message.content or "")
+
+            # Extract tool calls if present
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    try:
+                        arguments = json.loads(tc.function.arguments)
+                    except (json.JSONDecodeError, AttributeError):
+                        arguments = {}
+
+                    result.tool_calls.append({
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": arguments,
+                    })
+
+            logger.info(
+                "Got response (%d chars, %d tool calls)",
+                len(result.content), len(result.tool_calls),
             )
-            content = response.choices[0].message.content
-            logger.info("Got response (%d chars)", len(content) if content else 0)
-            return content or ""
+            return result
+
         except NotFoundError as e:
             last_err = e
             if attempt < _MAX_RETRIES:

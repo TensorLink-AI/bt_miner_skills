@@ -263,6 +263,38 @@ deployment wastes emissions and compute.
 
 ---
 
+## Backtest Evidence — Required Before Deployment
+
+The system tracks an **evidence gate** based on your actual execution output. Writing code
+that could run backtests is NOT the same as having backtest results. You must EXECUTE your
+pipeline and produce real numeric scores in stdout.
+
+**All of these must appear in your execution output before deployment is considered:**
+
+1. **Numeric CRPS scores** from your validator emulator on real price data
+2. **Per-asset CRPS breakdown** for all 9 assets (BTC, ETH, SOL, SUI, PEPE, SPY, QQQ, NVDA, AAPL)
+3. **Baseline comparison** — your model vs GBM and historical simulation, with numbers
+4. **Synth API cross-check** — live network scores fetched and compared to your emulator
+5. **Emulator validation** — proof that your CRPS values are in the same order of magnitude as live
+
+**Print results explicitly.** After each training/evaluation run, print a structured block:
+```
+=== BACKTEST RESULTS ===
+Model: <name>
+Overall CRPS: <value>
+BTC CRPS: <value>  ETH CRPS: <value>  SOL CRPS: <value>
+... (all 9 assets)
+GBM baseline CRPS: <value>
+Model vs baseline: <better/worse by X%>
+Synth API live CRPS: <value> (from /validation/scores/latest)
+=== END RESULTS ===
+```
+
+If you claim "ready to deploy" without these evidence gates being met, the system will
+redirect you to run actual backtests. Do not skip this.
+
+---
+
 ## Definition of Done
 
 You're done when your miner is deployed to mainnet, validated by the Synth API

@@ -8,9 +8,15 @@ import logging
 import os
 import re
 
+from ralph_loop.basilica import BASILICA_TOOLS, execute_tool_call
 from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_URL
+from ralph_loop.evidence import (
+    build_evidence_gate_warning,
+    build_evidence_summary,
+    extract_evidence,
+)
 from ralph_loop.executor import execute_response, get_workspace_snapshot
-from ralph_loop.llm import chat
+from ralph_loop.llm import chat_with_tools, LLMResponse
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
 from ralph_loop.state import LoopState, load_state, save_state
 
@@ -122,6 +128,16 @@ def build_prompt(
         recent_files = state.files_written[-20:]
         state_context_parts.append(f"**Files written so far:** {', '.join(recent_files)}")
 
+    # Inject backtest evidence summary — shows what's been proven vs missing
+    evidence_summary = build_evidence_summary(state)
+    if evidence_summary:
+        state_context_parts.append(evidence_summary)
+
+    # Inject evidence gate warning if agent claimed readiness without proof
+    gate_warning = build_evidence_gate_warning(state)
+    if gate_warning:
+        state_context_parts.append(gate_warning)
+
     state_context_parts.append(
         "\nDecide what to do next. Follow the response format (STATUS, DECISION, code blocks, RESULT_CHECK)."
     )
@@ -139,6 +155,28 @@ def _parse_requested_refs(response: str) -> list[str]:
     return refs
 
 
+def _handle_tool_calls(
+    llm_response: LLMResponse,
+    workspace_dir: str,
+) -> str:
+    """Execute any tool calls from the LLM response and format results."""
+    if not llm_response.has_tool_calls:
+        return ""
+
+    parts = ["## Tool Call Results\n"]
+    for tc in llm_response.tool_calls:
+        tool_name = tc["name"]
+        arguments = tc["arguments"]
+        logger.info("Executing tool call: %s(%s)", tool_name, list(arguments.keys()))
+
+        result = execute_tool_call(tool_name, arguments, workspace_dir)
+        parts.append(f"### {tool_name}")
+        parts.append(f"Arguments: {arguments}")
+        parts.append(f"Result:\n```json\n{result}\n```\n")
+
+    return "\n".join(parts)
+
+
 def run_skill_iteration(
     skill: SkillPackage,
     state: LoopState,
@@ -154,10 +192,16 @@ def run_skill_iteration(
     )
 
     messages = build_prompt(skill, state, share_knowledge=share_knowledge)
-    response = chat(messages)
-    logger.info("LLM response (%d chars):\n%s", len(response), response[:500])
+    llm_response = chat_with_tools(messages, tools=BASILICA_TOOLS)
 
-    # Execute code blocks from the response
+    response = llm_response.content
+    logger.info("LLM response (%d chars, %d tool calls):\n%s",
+                len(response), len(llm_response.tool_calls), response[:500])
+
+    # Handle any Basilica tool calls
+    tool_output = _handle_tool_calls(llm_response, workspace_dir)
+
+    # Execute code blocks from the text response
     report = execute_response(response, workspace_dir)
     logger.info(
         "Execution: %d steps, %d files written, %d commands",
@@ -167,11 +211,54 @@ def run_skill_iteration(
     # Update state
     state.conversation_history.append({"role": "assistant", "content": response})
     state.iteration_count += 1
-    state.last_execution_output = report.format_for_llm()
+
+    # Combine code block output and tool call output
+    exec_output = report.format_for_llm()
+    if tool_output:
+        exec_output = f"{exec_output}\n\n{tool_output}"
+    state.last_execution_output = exec_output
     state.workspace_snapshot = get_workspace_snapshot(workspace_dir)
     state.files_written.extend(report.files_written)
     state.commands_run.extend(report.commands_run)
     state.requested_references = _parse_requested_refs(response)
+
+    # Extract and track backtest evidence from this iteration
+    evidence = extract_evidence(
+        execution_output=exec_output,
+        llm_response=response,
+        iteration=state.iteration_count,
+    )
+    state.backtest_results.append(evidence)
+
+    # Update cumulative evidence flags
+    if evidence.get("has_real_scores"):
+        state.has_backtest_scores = True
+        crps_vals = evidence.get("crps_scores_found", [])
+        if crps_vals:
+            best = min(crps_vals)
+            if state.best_crps_overall == 0.0 or best < state.best_crps_overall:
+                state.best_crps_overall = best
+    if evidence.get("baseline_scores"):
+        state.has_baseline_comparison = True
+    if evidence.get("synth_api_compared"):
+        state.has_synth_api_check = True
+    if evidence.get("emulator_validated"):
+        state.has_validated_emulator = True
+
+    # Deployment is only ready when all evidence gates are met
+    state.deployment_ready = (
+        state.has_backtest_scores
+        and state.has_baseline_comparison
+        and state.has_synth_api_check
+        and state.has_validated_emulator
+    )
+
+    if evidence.get("claims_ready_without_evidence"):
+        logger.warning(
+            "EVIDENCE GATE: Agent claims readiness at iteration %d "
+            "but no backtest scores found in execution output!",
+            state.iteration_count,
+        )
 
     return state
 

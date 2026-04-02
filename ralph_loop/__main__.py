@@ -78,6 +78,19 @@ def main() -> None:
             print(f"    Workspace: {state.workspace_dir or '(not started)'}")
             if state.requested_references:
                 print(f"    Pending refs: {state.requested_references}")
+            # Evidence status
+            print(f"    --- Evidence ---")
+            print(f"    Backtest scores: {'YES' if state.has_backtest_scores else 'NO'}")
+            print(f"    Baseline comparison: {'YES' if state.has_baseline_comparison else 'NO'}")
+            print(f"    Synth API check: {'YES' if state.has_synth_api_check else 'NO'}")
+            print(f"    Emulator validated: {'YES' if state.has_validated_emulator else 'NO'}")
+            print(f"    Deployment ready: {'YES' if state.deployment_ready else 'NO'}")
+            if state.best_crps_overall > 0:
+                print(f"    Best CRPS: {state.best_crps_overall:.4f}")
+            backtests_with_scores = sum(
+                1 for r in state.backtest_results if r.get("has_real_scores")
+            )
+            print(f"    Iterations with scores: {backtests_with_scores}/{state.iteration_count}")
         return
 
     # Validate config before starting
