@@ -8,6 +8,7 @@ import logging
 import os
 import re
 
+from ralph_loop.basilica import BASILICA_TOOLS, execute_tool_call
 from ralph_loop.config import MAX_ITERATIONS, WORKSPACE_ROOT, COMMONS_URL
 from ralph_loop.evidence import (
     build_evidence_gate_warning,
@@ -15,7 +16,7 @@ from ralph_loop.evidence import (
     extract_evidence,
 )
 from ralph_loop.executor import execute_response, get_workspace_snapshot
-from ralph_loop.llm import chat
+from ralph_loop.llm import chat_with_tools, LLMResponse
 from ralph_loop.skill_discovery import SkillPackage, discover_skills
 from ralph_loop.state import LoopState, load_state, save_state
 
@@ -154,6 +155,28 @@ def _parse_requested_refs(response: str) -> list[str]:
     return refs
 
 
+def _handle_tool_calls(
+    llm_response: LLMResponse,
+    workspace_dir: str,
+) -> str:
+    """Execute any tool calls from the LLM response and format results."""
+    if not llm_response.has_tool_calls:
+        return ""
+
+    parts = ["## Tool Call Results\n"]
+    for tc in llm_response.tool_calls:
+        tool_name = tc["name"]
+        arguments = tc["arguments"]
+        logger.info("Executing tool call: %s(%s)", tool_name, list(arguments.keys()))
+
+        result = execute_tool_call(tool_name, arguments, workspace_dir)
+        parts.append(f"### {tool_name}")
+        parts.append(f"Arguments: {arguments}")
+        parts.append(f"Result:\n```json\n{result}\n```\n")
+
+    return "\n".join(parts)
+
+
 def run_skill_iteration(
     skill: SkillPackage,
     state: LoopState,
@@ -169,10 +192,16 @@ def run_skill_iteration(
     )
 
     messages = build_prompt(skill, state, share_knowledge=share_knowledge)
-    response = chat(messages)
-    logger.info("LLM response (%d chars):\n%s", len(response), response[:500])
+    llm_response = chat_with_tools(messages, tools=BASILICA_TOOLS)
 
-    # Execute code blocks from the response
+    response = llm_response.content
+    logger.info("LLM response (%d chars, %d tool calls):\n%s",
+                len(response), len(llm_response.tool_calls), response[:500])
+
+    # Handle any Basilica tool calls
+    tool_output = _handle_tool_calls(llm_response, workspace_dir)
+
+    # Execute code blocks from the text response
     report = execute_response(response, workspace_dir)
     logger.info(
         "Execution: %d steps, %d files written, %d commands",
@@ -182,7 +211,12 @@ def run_skill_iteration(
     # Update state
     state.conversation_history.append({"role": "assistant", "content": response})
     state.iteration_count += 1
-    state.last_execution_output = report.format_for_llm()
+
+    # Combine code block output and tool call output
+    exec_output = report.format_for_llm()
+    if tool_output:
+        exec_output = f"{exec_output}\n\n{tool_output}"
+    state.last_execution_output = exec_output
     state.workspace_snapshot = get_workspace_snapshot(workspace_dir)
     state.files_written.extend(report.files_written)
     state.commands_run.extend(report.commands_run)
@@ -190,7 +224,7 @@ def run_skill_iteration(
 
     # Extract and track backtest evidence from this iteration
     evidence = extract_evidence(
-        execution_output=report.format_for_llm(),
+        execution_output=exec_output,
         llm_response=response,
         iteration=state.iteration_count,
     )

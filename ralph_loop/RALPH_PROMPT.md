@@ -10,6 +10,24 @@ Your response is parsed for fenced code blocks. They run in this order:
 2. **`python`** blocks are written to files. The **first line must be** `# FILENAME: path/relative/to/workspace.py` — that line is consumed and the rest is written to disk.
 3. **`run`** blocks execute last (use for: running scripts you just wrote, tests, validations)
 
+### Basilica GPU Tools (Function Calling)
+
+You also have access to **Basilica tool calls** for GPU training. These are preferred over
+trying to run training locally (which will be blocked).
+
+| Tool | Purpose |
+|------|---------|
+| `basilica_submit_job` | Submit a training script to run on a remote GPU (A4000, V100, L40) |
+| `basilica_check_job` | Check status of a submitted job (queued/running/completed/failed) |
+| `basilica_fetch_results` | Download results (model checkpoints, scores) from a completed job |
+| `basilica_list_jobs` | List your recent jobs and their statuses |
+
+**IMPORTANT — Local training is blocked:**
+- Commands that appear to run PyTorch training locally (e.g. `python train.py` with
+  backward passes, optimizer steps) will be automatically blocked.
+- Always use `basilica_submit_job` for any model training or hyperparameter search.
+- Data pipeline, feature engineering, scoring, and evaluation are fine to run locally.
+
 Example:
 
 ~~~

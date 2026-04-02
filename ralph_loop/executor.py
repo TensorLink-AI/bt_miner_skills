@@ -11,6 +11,8 @@ import subprocess
 import time
 from dataclasses import dataclass, field
 
+from ralph_loop.basilica import check_for_local_training
+
 logger = logging.getLogger(__name__)
 
 EXECUTION_TIMEOUT = 600  # seconds per command (increased for Basilica job deployment/monitoring)
@@ -224,6 +226,15 @@ def _run_shell(command: str, workspace_dir: str, block_type: str) -> ExecResult:
     """Execute a shell command in the workspace directory."""
     result = ExecResult(block_type=block_type, command=command[:120])
     start = time.monotonic()
+
+    # Check for local GPU training attempts
+    training_warning = check_for_local_training(command)
+    if training_warning:
+        result.error = training_warning
+        result.exit_code = 1
+        result.duration = time.monotonic() - start
+        logger.warning("Blocked local training attempt: %s", command[:80])
+        return result
 
     try:
         proc = subprocess.run(
