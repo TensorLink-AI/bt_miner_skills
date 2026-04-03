@@ -1,0 +1,47 @@
+subnet:
+  name: synth
+  netuid: 50
+  network: mainnet
+
+strategy:
+  type: evoloop
+  config:
+    # Path to evoloop task files within this subnet directory
+    task_dir: evoloop_task/
+    # Where evoloop is cloned (override with EVOLOOP_DIR env var)
+    evoloop_dir: ""
+    # Execution backend: "basilica" for cloud GPU, "local" for local execution
+    backend: basilica
+    # GPU type for Basilica (cheap GPUs only: A4000, V100, L40)
+    gpu: A4000
+    gpu_count: 1
+    # Seconds per experiment
+    time_budget: 600
+    # LLM settings for evoloop's proposal/reflection
+    llm_provider: openai
+    llm_model: gpt-4.1
+    llm_model_strong: o3
+    # Max experiments (0 = unlimited, defer to convergence settings)
+    max_experiments: 0
+
+convergence:
+  # Stop if Pareto front hasn't improved in this many iterations
+  stale_threshold: 15
+  # Always run at least this many experiments
+  min_experiments: 10
+  # Hard ceiling (0 = unlimited)
+  max_experiments: 0
+
+competitiveness:
+  # Must beat GBM baseline by this fraction on CRPS
+  baseline_improvement: 0.15
+  # Must beat network median on this fraction of assets
+  min_asset_coverage: 0.70
+  # Must be stable over this many hours of live testing
+  consistency_window_hours: 48
+
+monitor:
+  # How often to check live performance (minutes)
+  check_interval_minutes: 30
+  # Trigger re-evolution if emission share drops below threshold
+  re_evolve_trigger: "emission_share < 0.01"

@@ -1,0 +1,32 @@
+# Template evoloop task definition
+#
+# Customize for your subnet's optimization objectives.
+
+name: my-task
+description: >
+  Describe what you're optimizing and how it's scored.
+
+target_file: train.py          # File evoloop will mutate
+frozen_files:
+  - prepare.py                 # Evaluation harness (not mutated)
+
+objectives:
+  primary_metric:
+    pattern: "primary_metric=([0-9.]+)"
+    direction: minimize        # or maximize
+
+  # secondary_metric:
+  #   pattern: "secondary_metric=([0-9.]+)"
+  #   direction: minimize
+
+strategies:
+  - name: change_approach
+    description: >
+      Describe a category of mutations the LLM can try.
+
+  - name: tune_parameters
+    description: >
+      Adjust hyperparameters to improve performance.
+
+constraints:
+  - List rules the LLM must follow during mutation

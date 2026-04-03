@@ -1,0 +1,80 @@
+# Synth Subnet (SN50) — evoloop task definition
+#
+# evoloop evolves train.py to optimize the objectives below.
+# prepare.py is frozen — it handles data loading, evaluation, and CRPS scoring.
+
+name: synth-forecaster
+description: >
+  Optimize a probabilistic price forecaster for Bittensor Subnet 50 (Synth).
+  Miners generate 1000 simulated price paths per asset. Scored by CRPS
+  (Continuous Ranked Probability Score) — lower is better.
+
+target_file: train.py
+frozen_files:
+  - prepare.py
+
+objectives:
+  # Primary: weighted CRPS across all assets (lower is better)
+  crps_weighted:
+    pattern: "crps_weighted=([0-9.]+)"
+    direction: minimize
+
+  # Secondary: worst single-asset CRPS (lower is better — penalizes imbalance)
+  crps_worst_asset:
+    pattern: "crps_worst_asset=([0-9.]+)"
+    direction: minimize
+
+  # Tertiary: training time in seconds (lower is better — prefer efficient models)
+  train_time:
+    pattern: "train_time=([0-9.]+)"
+    direction: minimize
+
+strategies:
+  - name: change_distribution
+    description: >
+      Replace Gaussian output head with heavier-tailed distributions
+      (Student-t, mixture density, log-normal). Crypto returns are fat-tailed —
+      Gaussian is provably suboptimal at longer horizons.
+
+  - name: modify_architecture
+    description: >
+      Change the model backbone: try Temporal Fusion Transformer, N-BEATS,
+      TCN, or simple MLP variants. DLinear is a baseline, not the ceiling.
+
+  - name: improve_features
+    description: >
+      Add or modify input features: cross-asset correlations, volatility
+      regime indicators, VWAP deviation, volume profiles. All features must
+      be causal (.shift(1)) — no lookahead.
+
+  - name: tune_hyperparameters
+    description: >
+      Adjust learning rate, batch size, lookback window, number of epochs,
+      kernel size, dropout, weight decay. Small changes can have large effects.
+
+  - name: uncertainty_scaling
+    description: >
+      Make uncertainty grow with forecast horizon. A fixed sigma across all
+      intervals leaves CRPS on the table. Try horizon-dependent scaling,
+      learned variance schedules, or separate heads per interval bucket.
+
+  - name: equity_handling
+    description: >
+      Improve handling of equity assets (SPYX, NVDAX, TSLAX, AAPLX, GOOGLX).
+      Market hours gaps, different volatility profiles, and data sourcing
+      challenges make these harder. Many miners do them poorly — opportunity.
+
+  - name: ensemble
+    description: >
+      Combine multiple model outputs. Ensemble of diverse models can improve
+      CRPS by capturing different market regimes. Simple averaging or
+      learned weighting.
+
+constraints:
+  - All features must be causal — use .shift(1) or equivalent, no lookahead
+  - Must generate exactly 1000 price paths per asset
+  - Must handle all 9 assets for 24h and all 4 for 1h challenge
+  - CRPS is computed on basis point changes, not raw prices
+  - Path lengths must be exactly 289 (24h) or 61 (1h)
+  - First price in each path must equal current_price
+  - No training on the local machine — use Basilica for GPU workloads
