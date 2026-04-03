@@ -1,1 +1,5 @@
 pyyaml>=6.0
+# evoloop — install from git for evolutionary model search strategy
+# pip install git+https://github.com/TensorLink-AI/evoloop.git
+# Or for local development: pip install -e /path/to/evoloop
+# Falls back to subprocess mode (EVOLOOP_DIR) if not installed
