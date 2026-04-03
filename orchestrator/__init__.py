@@ -1,1 +1,1 @@
-"""Subnet miner orchestrator — generic lifecycle engine for Bittensor miners."""
+"""Subnet miner orchestrator — LLM agent managing Bittensor miner lifecycle."""
