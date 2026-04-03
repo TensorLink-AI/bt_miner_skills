@@ -1,0 +1,54 @@
+# Subnet Miner Package Template
+#
+# Copy this directory to subnets/<your-subnet-name>/ and fill in the values.
+# Then run: python -m orchestrator.orchestrator --subnet <your-subnet-name>
+
+subnet:
+  name: my-subnet          # Human-readable name
+  netuid: 0                # Bittensor subnet netuid
+  network: testnet         # mainnet or testnet
+
+# Strategy: how the orchestrator searches for the best solution
+# Options: evoloop, config_search, model_selection, custom
+strategy:
+  type: evoloop
+  config:
+    # --- evoloop strategy ---
+    task_dir: evoloop_task/
+    evoloop_dir: ""             # Path to evoloop repo (or set EVOLOOP_DIR env var)
+    backend: basilica           # basilica or local
+    gpu: A4000                  # A4000, V100, L40 (cheap GPUs only)
+    time_budget: 600            # Seconds per experiment
+
+    # --- config_search strategy ---
+    # search_script: search.py
+    # search_space:
+    #   param_a: [1, 2, 3]
+    #   param_b: [0.1, 0.01, 0.001]
+    # mode: grid                # grid or random
+    # metric_key: score
+    # minimize: true
+
+    # --- model_selection strategy ---
+    # candidates_file: candidates.yaml
+    # eval_script: evaluate.py
+    # metric_key: score
+    # minimize: true
+
+    # --- custom strategy ---
+    # script: iterate.py
+    # results_file: results.json
+
+convergence:
+  stale_threshold: 15     # Stop if no improvement in N iterations
+  min_experiments: 10     # Always run at least N experiments
+  max_experiments: 0      # Hard ceiling (0 = unlimited)
+
+competitiveness:
+  baseline_improvement: 0.15    # Must beat baseline by this fraction
+  min_asset_coverage: 0.70      # Subnet-specific quality gate
+  consistency_window_hours: 48  # Stability requirement
+
+monitor:
+  check_interval_minutes: 30
+  re_evolve_trigger: ""         # Expression to trigger re-search

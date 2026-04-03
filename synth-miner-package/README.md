@@ -7,7 +7,8 @@ Everything needed to build a competitive miner for the Synth Subnet (Bittensor S
 ```
 synth-miner-package/
 ├── README.md              ← You are here
-├── AGENT_PROMPT.md        ← Give this to your loop agent (Ralph, Claude Code, etc.)
+├── AGENT_PROMPT.md        ← Task prompt for autonomous agents
+├── subnet.json            ← Subnet metadata (netuid, name)
 └── skill/
     ├── SKILL.md           ← Entry point: subnet overview, challenge specs, scoring rules
     └── references/
@@ -22,21 +23,37 @@ synth-miner-package/
 
 ## How to Use
 
-### With a loop agent (Ralph, Claude Code, Cline, etc.)
+### With the Orchestrator + Evoloop (recommended)
 
-1. Point the agent at this directory as its workspace
-2. Give it the contents of `AGENT_PROMPT.md` as the task prompt
-3. Make sure the agent can read files from `skill/` during execution
-4. Let it run through the 8 phases autonomously
+The orchestrator provides a generic lifecycle engine that uses [evoloop](https://github.com/TensorLink-AI/evoloop)
+for evolutionary model search. The Synth subnet package is configured in `subnets/synth/`.
 
-The agent prompt has phase gates — concrete pass/fail checks at each stage — so the agent
-can't skip ahead past broken steps.
+```bash
+# Run the full lifecycle: setup → search (evoloop) → deploy → monitor
+python -m orchestrator.orchestrator --subnet synth
+
+# Run a specific phase
+python -m orchestrator.orchestrator --subnet synth --phase search
+python -m orchestrator.orchestrator --subnet synth --phase monitor
+
+# List available subnets
+python -m orchestrator.orchestrator --list
+```
+
+The orchestrator:
+1. **Setup** — validates data sources, Basilica credentials, evoloop task files
+2. **Search** — runs evoloop to evolve `train.py` against CRPS objectives
+3. **Deploy** — promotes the best model to production, starts the miner
+4. **Monitor** — checks Synth API for live performance, re-evolves if degrading
+
+See `subnets/synth/subnet.yaml` for configuration (convergence thresholds,
+competitiveness gates, monitoring intervals).
 
 ### With Claude (interactive)
 
 1. Install `skill/` as a Claude skill (drop into `/mnt/skills/user/synth-miner-mlops/`)
 2. Ask Claude to help you build a Synth miner — the skill triggers automatically
-3. Use the `AGENT_PROMPT.md` phases as a roadmap for what to work on in order
+3. Use the `AGENT_PROMPT.md` as a roadmap for what to work on in order
 
 ### Manual (just reading)
 
@@ -45,16 +62,14 @@ The reference files contain complete Python implementations you can copy and ada
 
 ## What Gets Built
 
-By the end of the agent prompt's 8 phases, you'll have:
+By the end of the pipeline, you'll have:
 
 - Historical data pipeline for all 9 assets with anti-leakage walk-forward splits
-- DLinear + Gaussian probabilistic head model (baseline, easily swappable)
+- Probabilistic forecasting model evolved by evoloop for optimal CRPS
 - Local validator emulator that replicates exact CRPS scoring
-- Automated model search (hyperparameter sweep + evaluation)
-- Leaderboard tracking per-model, per-asset, per-interval CRPS
-- Live testing against Pyth Oracle price feeds
 - Model registry with hot-swap deployment to production miner
-- PM2-managed miner process ready for Bittensor mainnet (SN50)
+- PM2-managed miner process on Bittensor mainnet (SN50)
+- Continuous monitoring with automatic re-evolution on performance degradation
 
 ## Key Numbers
 
@@ -72,16 +87,8 @@ By the end of the agent prompt's 8 phases, you'll have:
 
 ## External Skills
 
-This package is self-contained, but some tasks benefit from specialist skills maintained
-elsewhere. The agent prompt tells the agent when and how to fetch these.
-
 | Skill | What It Does | When Needed | Source |
 |-------|-------------|-------------|--------|
 | **basilica-cli-helper** | Basilica CLI for GPU instance management | Training on Basilica GPUs | [mcpmarket.com](https://mcpmarket.com/tools/skills/basilica-cli-helper) |
 | **basilica-sdk** | Basilica Python SDK for deploying GPU workloads | Training on Basilica GPUs | Pre-installed in Claude at `/mnt/skills/user/basilica-sdk/` |
 | **bittensor-subnet-design** | General Bittensor subnet patterns and CLI | Understanding SN50 architecture | Pre-installed in Claude at `/mnt/skills/user/bittensor-subnet-design/` |
-
-### Adding Your Own
-
-To plug in another skill, add a row to the table above in this README, add it to the
-"Available External Skills" table in `AGENT_PROMPT.md`, and reference it from the relevant phase.

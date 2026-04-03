@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
-.ralph_state/
-workspace/
 .env
+workspace/
+*.egg-info/
+dist/
+build/
