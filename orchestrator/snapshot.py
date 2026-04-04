@@ -26,7 +26,10 @@ def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
     if state.search_running:
         elapsed = now - state.search_started_at if state.search_started_at else 0
         elapsed_str = f"{elapsed / 3600:.1f}h" if elapsed > 3600 else f"{elapsed / 60:.0f}m"
-        lines.append(f"  Status: RUNNING (started {elapsed_str} ago)")
+        pid_info = f", PID {state.search_pid}" if state.search_pid else ""
+        lines.append(f"  Status: RUNNING (started {elapsed_str} ago{pid_info})")
+    elif state.experiments_run > 0 and state.phase == "searching":
+        lines.append(f"  Status: FINISHED (search process exited)")
     else:
         lines.append(f"  Status: not running")
 

@@ -23,8 +23,10 @@ class AgentState:
 
     # Search state
     search_running: bool = False
+    search_pid: int | None = None  # PID of background search process
     search_started_at: float = 0.0
     experiments_run: int = 0
+    experiments_at_last_improvement: int = 0
     best_metric: float | None = None
     best_artifact: str | None = None
     stale_count: int = 0  # experiments since last improvement
@@ -81,8 +83,10 @@ class AgentState:
             "phase": self.phase,
             "phase_started_at": self.phase_started_at,
             "search_running": self.search_running,
+            "search_pid": self.search_pid,
             "search_started_at": self.search_started_at,
             "experiments_run": self.experiments_run,
+            "experiments_at_last_improvement": self.experiments_at_last_improvement,
             "best_metric": self.best_metric,
             "best_artifact": self.best_artifact,
             "stale_count": self.stale_count,

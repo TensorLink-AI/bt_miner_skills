@@ -124,6 +124,18 @@ def heuristic_decide(snapshot: str) -> dict:
             except ValueError:
                 pass
 
+    # Also parse stale threshold from goals section
+    stale_threshold = 15  # default
+    for line in snapshot.split("\n"):
+        line = line.strip()
+        if line.startswith("Stop search if stale for:"):
+            try:
+                stale_threshold = int(line.split(":")[1].strip().split()[0])
+            except ValueError:
+                pass
+        elif "Search finished" in line or "FINISHED" in line:
+            search_running = False
+
     # Decision logic
     if errors >= 3:
         return {
@@ -148,23 +160,44 @@ def heuristic_decide(snapshot: str) -> dict:
 
     if phase == "searching":
         if search_running:
+            # Search is running in background — check progress
+            if stale_count >= stale_threshold:
+                return {
+                    "reasoning": (
+                        f"Search stale for {stale_count} experiments "
+                        f"(threshold: {stale_threshold}). Stopping to deploy best so far."
+                    ),
+                    "tool": "stop_search",
+                    "params": {},
+                }
             return {
-                "reasoning": f"Search in progress ({experiments_run} experiments). Checking status.",
+                "reasoning": (
+                    f"Search running in background ({experiments_run} experiments, "
+                    f"stale: {stale_count}/{stale_threshold}). Checking live progress."
+                ),
                 "tool": "get_search_status",
                 "params": {},
             }
-        elif best_metric is not None:
-            return {
-                "reasoning": f"Search completed with best metric {best_metric}. Deploying.",
-                "tool": "deploy",
-                "params": {},
-            }
         else:
-            return {
-                "reasoning": "Search finished but no results. Re-running setup.",
-                "tool": "run_setup",
-                "params": {},
-            }
+            # Search process finished (or was never started)
+            if best_metric is not None:
+                return {
+                    "reasoning": f"Search finished with best metric {best_metric}. Deploying.",
+                    "tool": "deploy",
+                    "params": {},
+                }
+            elif experiments_run > 0:
+                return {
+                    "reasoning": "Search finished but no good results. Re-running setup and retrying.",
+                    "tool": "run_setup",
+                    "params": {},
+                }
+            else:
+                return {
+                    "reasoning": "No search running and no results. Starting search.",
+                    "tool": "start_search",
+                    "params": {},
+                }
 
     if phase == "deploying":
         return {
