@@ -1,7 +1,7 @@
 """Synth subnet setup — validate prerequisites before evoloop runs.
 
 This script:
-1. Checks that data sources are accessible (Binance, yfinance)
+1. Checks that numpy is available (used by prepare.py for synthetic data + CRPS)
 2. Validates that evoloop task files exist (task.yaml, train.py, prepare.py)
 3. Verifies the Synth API is reachable for post-search benchmarking
 
@@ -16,33 +16,18 @@ import sys
 from pathlib import Path
 
 
-def check_data_sources() -> bool:
-    """Verify that we can reach the data APIs we need."""
+def check_dependencies() -> bool:
+    """Verify that required Python packages are installed."""
     ok = True
 
-    # Check Binance API (crypto OHLCV)
-    try:
-        import urllib.request
-        req = urllib.request.Request(
-            "https://api.binance.com/api/v3/ping",
-            headers={"User-Agent": "synth-setup"},
-        )
-        urllib.request.urlopen(req, timeout=10)
-        print("[setup] Binance API: OK")
-    except Exception as e:
-        print(f"[setup] Binance API: FAILED ({e})")
-        ok = False
-
-    # Check yfinance availability (equity data)
+    # numpy is required by prepare.py (CRPS scoring, synthetic data)
     try:
         import importlib
-        importlib.import_module("yfinance")
-        print("[setup] yfinance: OK (installed)")
+        importlib.import_module("numpy")
+        print("[setup] numpy: OK")
     except ImportError:
-        print("[setup] yfinance: NOT INSTALLED (pip install yfinance)")
-        print("[setup]   Equity data (SPY, NVDA, TSLA, AAPL, GOOGL) requires yfinance.")
-        # Not fatal — evoloop can install it, but warn
-        ok = True
+        print("[setup] numpy: NOT INSTALLED (pip install numpy)")
+        ok = False
 
     return ok
 
@@ -111,7 +96,7 @@ def main() -> None:
     print()
 
     checks = [
-        ("Data sources", check_data_sources),
+        ("Dependencies", check_dependencies),
         ("Evoloop task files", check_evoloop_task_files),
         ("Synth API", check_synth_api),
         ("Basilica compute", check_basilica),

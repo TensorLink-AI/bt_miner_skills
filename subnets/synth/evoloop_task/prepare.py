@@ -138,8 +138,8 @@ def generate_synthetic_data(
 ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
     """Generate synthetic return data for testing.
 
-    In production, this would fetch real OHLCV from Binance/yfinance
-    and compute causal features with .shift(1).
+    TODO: replace with real data pipeline (fetch OHLCV, compute causal
+    features with .shift(1)). Currently uses synthetic data for evoloop.
 
     Returns:
         (train_data, val_data) dicts mapping asset -> returns in bps
