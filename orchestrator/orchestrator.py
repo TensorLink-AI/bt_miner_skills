@@ -84,6 +84,9 @@ def heuristic_decide(snapshot: str) -> dict:
     """Simple rule-based fallback when no LLM is available.
 
     Follows the obvious path: setup → search → deploy → monitor → re-search.
+    All tools are non-blocking, so the heuristic just re-calls the same tool
+    if a background task is still running (the tool itself detects this and
+    returns status instead of launching a new process).
     """
     # Parse key facts from the snapshot text
     phase = "idle"
@@ -91,16 +94,19 @@ def heuristic_decide(snapshot: str) -> dict:
     deployed = False
     experiments_run = 0
     best_metric = None
-    last_monitor = False
     stale_count = 0
     errors = 0
+    setup_running = False
+    deploy_running = False
+    monitor_running = False
+    emission_declining = False
 
     for line in snapshot.split("\n"):
         line = line.strip()
         if line.startswith("Current phase:"):
             phase = line.split(":")[1].strip().split()[0]
-        elif "Status: RUNNING" in line:
-            search_running = True
+        elif "Status: RUNNING" in line and "Search" not in line:
+            pass  # handled by specific task parsing
         elif "Status: DEPLOYED" in line:
             deployed = True
         elif line.startswith("Experiments run:"):
@@ -123,8 +129,60 @@ def heuristic_decide(snapshot: str) -> dict:
                 errors = int(line.split(":")[1].strip())
             except ValueError:
                 pass
+        elif line.startswith("Setup: RUNNING"):
+            setup_running = True
+        elif line.startswith("Deploy: RUNNING"):
+            deploy_running = True
+        elif line.startswith("Monitor: RUNNING"):
+            monitor_running = True
+        elif "Trend: emission_share declining" in line:
+            emission_declining = True
 
-    # Decision logic
+    # Parse search running from the Search section
+    for line in snapshot.split("\n"):
+        line = line.strip()
+        if line.startswith("Status: RUNNING") or line.startswith("Status: FINISHED"):
+            # In the Search section
+            if "RUNNING" in line and "FINISHED" not in line:
+                search_running = True
+            elif "FINISHED" in line:
+                search_running = False
+
+    # Also parse stale threshold from goals section
+    stale_threshold = 15  # default
+    for line in snapshot.split("\n"):
+        line = line.strip()
+        if line.startswith("Stop search if stale for:"):
+            try:
+                stale_threshold = int(line.split(":")[1].strip().split()[0])
+            except ValueError:
+                pass
+
+    # --- Decision logic ---
+
+    # If a background task is running, re-call it to check status
+    if setup_running:
+        return {
+            "reasoning": "Setup is running in background. Checking if it finished.",
+            "tool": "run_setup",
+            "params": {},
+        }
+
+    if deploy_running:
+        return {
+            "reasoning": "Deploy is running in background. Checking if it finished.",
+            "tool": "deploy",
+            "params": {},
+        }
+
+    if monitor_running:
+        return {
+            "reasoning": "Monitor is running in background. Checking if it finished.",
+            "tool": "check_live_performance",
+            "params": {},
+        }
+
+    # Too many errors — reset with setup
     if errors >= 3:
         return {
             "reasoning": f"{errors} consecutive errors. Re-running setup to validate prerequisites.",
@@ -148,32 +206,57 @@ def heuristic_decide(snapshot: str) -> dict:
 
     if phase == "searching":
         if search_running:
+            if stale_count >= stale_threshold:
+                return {
+                    "reasoning": (
+                        f"Search stale for {stale_count} experiments "
+                        f"(threshold: {stale_threshold}). Stopping to deploy best so far."
+                    ),
+                    "tool": "stop_search",
+                    "params": {},
+                }
             return {
-                "reasoning": f"Search in progress ({experiments_run} experiments). Checking status.",
+                "reasoning": (
+                    f"Search running in background ({experiments_run} experiments, "
+                    f"stale: {stale_count}/{stale_threshold}). Checking live progress."
+                ),
                 "tool": "get_search_status",
                 "params": {},
             }
-        elif best_metric is not None:
-            return {
-                "reasoning": f"Search completed with best metric {best_metric}. Deploying.",
-                "tool": "deploy",
-                "params": {},
-            }
         else:
-            return {
-                "reasoning": "Search finished but no results. Re-running setup.",
-                "tool": "run_setup",
-                "params": {},
-            }
+            if best_metric is not None:
+                return {
+                    "reasoning": f"Search finished with best metric {best_metric}. Deploying.",
+                    "tool": "deploy",
+                    "params": {},
+                }
+            elif experiments_run > 0:
+                return {
+                    "reasoning": "Search finished but no good results. Re-running setup and retrying.",
+                    "tool": "run_setup",
+                    "params": {},
+                }
+            else:
+                return {
+                    "reasoning": "No search running and no results. Starting search.",
+                    "tool": "start_search",
+                    "params": {},
+                }
 
     if phase == "deploying":
         return {
-            "reasoning": "Deployment phase — deploying best artifact.",
+            "reasoning": "Deployment phase — checking deploy status.",
             "tool": "deploy",
             "params": {},
         }
 
     if phase == "monitoring":
+        if emission_declining:
+            return {
+                "reasoning": "Emission share is declining. Re-evolving to find a better model.",
+                "tool": "start_search",
+                "params": {},
+            }
         return {
             "reasoning": "Deployed. Checking live performance.",
             "tool": "check_live_performance",
