@@ -1,12 +1,13 @@
 """Agent tools — actions the overlord LLM can invoke.
 
-Each tool is a function that takes the current context (config, state, etc.)
-and returns a result dict. The agent calls these by name; the orchestrator
-dispatches and records the outcome.
+Every tool is non-blocking. Long-running operations (setup, search, deploy,
+monitor) launch as background subprocesses via _launch_background_task().
+Each writes a result JSON when done. On the next tick the agent re-calls the
+same tool, which detects the finished task and reads the result.
 
-Key design: start_search launches evoloop as a background process. The agent
-ticks every N minutes regardless. get_search_status reads evoloop's live
-experiment DB from disk to check progress without blocking.
+Pattern for each async tool:
+  1. If already running → check PID alive → if dead, read result file
+  2. If not running → launch subprocess, store PID, return "launched"
 """
 
 from __future__ import annotations
@@ -17,12 +18,13 @@ import os
 import signal
 import shutil
 import subprocess
+import sys
+import textwrap
 import time
 from pathlib import Path
 from typing import Any
 
 from orchestrator.config import SubnetConfig
-from orchestrator.lifecycle import run_deploy, run_monitor, run_setup
 from orchestrator.state import AgentState
 
 
@@ -34,9 +36,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "run_setup",
         "description": (
-            "Run the subnet's setup script to validate prerequisites "
-            "(data source access, dependencies, eval harness). "
-            "Use this before starting a search, or if you suspect something is broken."
+            "Validate prerequisites (data sources, dependencies, eval harness). "
+            "Non-blocking: launches in the background and reports result on next call. "
+            "Use before starting a search, or if something seems broken."
         ),
         "parameters": {},
     },
@@ -76,9 +78,9 @@ TOOL_DEFINITIONS = [
     {
         "name": "deploy",
         "description": (
-            "Deploy the best model/artifact from the search to production. "
-            "Runs the subnet's deploy script. Only call after search has "
-            "produced results (check get_search_status first)."
+            "Deploy the best model/artifact to production. Non-blocking: "
+            "launches deploy script in background, reports result on next call. "
+            "Only call after search has produced results."
         ),
         "parameters": {
             "artifact_path": {
@@ -91,17 +93,17 @@ TOOL_DEFINITIONS = [
     {
         "name": "check_live_performance",
         "description": (
-            "Run the subnet's monitor script to check live miner performance. "
-            "Returns health status, metrics (emission share, rank), and whether "
-            "re-evolution is recommended."
+            "Check live miner performance via the subnet's monitor script. "
+            "Non-blocking: launches in background, reports result on next call. "
+            "Returns health status, metrics (emission share, rank), and trends."
         ),
         "parameters": {},
     },
     {
         "name": "wait",
         "description": (
-            "Do nothing for now. Use when the search is running and making "
-            "progress, or when monitoring and everything looks healthy. "
+            "Do nothing for now. Use when background tasks are running and "
+            "making progress, or when monitoring and everything looks healthy. "
             "You MUST provide a reason explaining why waiting is the right call."
         ),
         "parameters": {
@@ -116,7 +118,7 @@ TOOL_DEFINITIONS = [
 
 
 # ──────────────────────────────────────────────
-# Process management helpers
+# Generic background task infrastructure
 # ──────────────────────────────────────────────
 
 def _pid_is_alive(pid: int | None) -> bool:
@@ -132,12 +134,102 @@ def _pid_is_alive(pid: int | None) -> bool:
         return True  # process exists but we can't signal it
 
 
-def _read_experiment_db(config: SubnetConfig) -> list[dict]:
-    """Read evoloop's experiment database from disk.
+def _result_path_for(config: SubnetConfig, task_name: str) -> Path:
+    """Convention-based result file: workspace/<task_name>_result.json."""
+    return config.workspace_dir / f"{task_name}_result.json"
 
-    evoloop writes experiments as JSON files or a single db.json.
-    We check multiple possible locations.
+
+def _log_path_for(config: SubnetConfig, task_name: str) -> Path:
+    """Convention-based log file: workspace/<task_name>.log."""
+    return config.workspace_dir / f"{task_name}.log"
+
+
+def _launch_background_task(
+    cmd: list[str],
+    cwd: str | None,
+    env: dict[str, str],
+    result_path: Path,
+    log_path: Path,
+    capture_stdout: bool = True,
+) -> subprocess.Popen | None:
+    """Launch a subprocess that writes its result to a JSON file when done.
+
+    Uses a tiny Python wrapper that:
+    1. Runs the actual command
+    2. Captures stdout/stderr
+    3. Writes {exit_code, stdout, stderr} to result_path
     """
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Remove stale result from a previous run
+    if result_path.exists():
+        result_path.unlink()
+
+    if capture_stdout:
+        # Wrap in a Python script that captures output and writes result JSON
+        wrapper = textwrap.dedent(f"""\
+            import subprocess, json, sys
+            try:
+                r = subprocess.run(
+                    {cmd!r},
+                    cwd={str(cwd) if cwd else None!r},
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                )
+                result = {{"exit_code": r.returncode, "stdout": r.stdout, "stderr": r.stderr}}
+            except subprocess.TimeoutExpired:
+                result = {{"exit_code": -1, "stdout": "", "stderr": "Timed out after 600s"}}
+            except Exception as e:
+                result = {{"exit_code": -1, "stdout": "", "stderr": str(e)}}
+            with open({str(result_path)!r}, "w") as f:
+                json.dump(result, f, indent=2)
+        """)
+        launch_cmd = [sys.executable, "-c", wrapper]
+    else:
+        # For search: stream stdout to log, no wrapper needed
+        launch_cmd = cmd
+
+    try:
+        log_file = open(log_path, "a")
+        log_file.write(f"\n{'='*60}\n")
+        log_file.write(f"Task started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log_file.write(f"Command: {' '.join(cmd)}\n")
+        log_file.write(f"{'='*60}\n\n")
+        log_file.flush()
+
+        proc = subprocess.Popen(
+            launch_cmd,
+            cwd=cwd if not capture_stdout else None,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        return proc
+    except Exception as e:
+        print(f"[bg-task] Failed to launch: {e}")
+        return None
+
+
+def _read_task_result(result_path: Path) -> dict | None:
+    """Read a background task's result JSON. Returns None if not ready."""
+    if not result_path.exists():
+        return None
+    try:
+        with open(result_path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+# ──────────────────────────────────────────────
+# Search-specific helpers (evoloop experiment DB)
+# ──────────────────────────────────────────────
+
+def _read_experiment_db(config: SubnetConfig) -> list[dict]:
+    """Read evoloop's experiment database from disk."""
     evoloop_dir = Path(
         config.strategy.config.get(
             "evoloop_dir",
@@ -200,31 +292,76 @@ def _find_best_experiment(experiments: list[dict]) -> dict | None:
 
 
 # ──────────────────────────────────────────────
-# Tool implementations
+# Tool implementations — all non-blocking
 # ──────────────────────────────────────────────
 
 def tool_run_setup(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
-    """Run the subnet's setup/prerequisite checks."""
+    """Non-blocking setup: launch or read result."""
+
+    # If setup is already running, check if it finished
+    if state.setup_running:
+        if _pid_is_alive(state.setup_pid):
+            return {"success": True, "message": f"Setup still running (PID {state.setup_pid}). Will check next tick."}
+
+        # Process finished — read result
+        state.setup_running = False
+        state.setup_pid = None
+
+        result = _read_task_result(_result_path_for(config, "setup"))
+        if result is None:
+            state.consecutive_errors += 1
+            state.last_error = "Setup finished but no result file found"
+            return {"success": False, "message": "Setup finished but no result file found."}
+
+        if result["exit_code"] == 0:
+            state.consecutive_errors = 0
+            state.last_error = None
+            return {"success": True, "message": "Setup checks passed."}
+        else:
+            state.consecutive_errors += 1
+            stderr_snippet = result.get("stderr", "")[:300]
+            state.last_error = f"Setup failed (exit {result['exit_code']}): {stderr_snippet}"
+            return {"success": False, "message": state.last_error}
+
+    # Launch setup in background
+    setup_script = config.subnet_dir / "setup.py"
+    if not setup_script.exists():
+        return {"success": True, "message": "No setup.py found, skipping."}
+
     state.phase = "setup"
     state.phase_started_at = time.time()
+    config.workspace_dir.mkdir(parents=True, exist_ok=True)
 
-    success = run_setup(config.subnet_dir, config.workspace_dir)
+    env = {
+        **os.environ,
+        "WORKSPACE_DIR": str(config.workspace_dir),
+        "SUBNET_DIR": str(config.subnet_dir),
+    }
 
-    if success:
-        state.consecutive_errors = 0
-        state.last_error = None
-        return {"success": True, "message": "Setup checks passed."}
-    else:
+    proc = _launch_background_task(
+        cmd=[sys.executable, str(setup_script)],
+        cwd=str(config.subnet_dir),
+        env=env,
+        result_path=_result_path_for(config, "setup"),
+        log_path=_log_path_for(config, "setup"),
+    )
+
+    if proc is None:
         state.consecutive_errors += 1
-        state.last_error = "Setup failed"
-        return {"success": False, "message": "Setup checks failed. Check logs above."}
+        state.last_error = "Failed to launch setup process"
+        return {"success": False, "message": "Failed to launch setup process."}
+
+    state.setup_running = True
+    state.setup_pid = proc.pid
+    print(f"[setup] Launched in background (PID {proc.pid})")
+
+    return {"success": True, "message": f"Setup launched in background (PID {proc.pid})."}
 
 
 def tool_start_search(
     config: SubnetConfig, state: AgentState, max_experiments: int = 0
 ) -> dict[str, Any]:
     """Launch the search strategy as a background process. Returns immediately."""
-    # Check if a search is already running
     if state.search_running and _pid_is_alive(state.search_pid):
         return {
             "success": False,
@@ -234,7 +371,6 @@ def tool_start_search(
             ),
         }
 
-    # Build the evoloop launch command
     from orchestrator.strategies import get_strategy
     strategy = get_strategy(config)
 
@@ -243,14 +379,12 @@ def tool_start_search(
         state.last_error = "Strategy setup failed"
         return {"success": False, "message": "Strategy setup failed."}
 
-    # Build subprocess command and env
     proc = _launch_search_process(config, strategy, max_experiments)
     if proc is None:
         state.consecutive_errors += 1
         state.last_error = "Failed to launch search process"
         return {"success": False, "message": "Failed to launch search process."}
 
-    # Update state — search is now running in background
     state.phase = "searching"
     state.phase_started_at = time.time()
     state.search_running = True
@@ -272,13 +406,16 @@ def tool_start_search(
 def _launch_search_process(
     config: SubnetConfig, strategy: Any, max_experiments: int
 ) -> subprocess.Popen | None:
-    """Launch evoloop (or other strategy) as a background subprocess."""
+    """Launch evoloop (or other strategy) as a background subprocess.
+
+    Search is special: it streams to a log file (no wrapper) because it's
+    long-running and we read experiment DB from disk instead.
+    """
     sc = config.strategy.config
     evoloop_dir = Path(
         sc.get("evoloop_dir", os.environ.get("EVOLOOP_DIR", ""))
     )
 
-    # Determine command
     evoloop_cli = shutil.which("evoloop")
     source_task_dir = config.subnet_dir / sc.get("task_dir", "evoloop_task/")
     task_yaml = source_task_dir / "task.yaml"
@@ -291,13 +428,11 @@ def _launch_search_process(
             cmd.extend(["--max-experiments", str(effective_max)])
         cwd = None
     elif evoloop_dir.name and evoloop_dir.exists():
-        # Copy task files into evoloop's tasks/ dir
         target_task_dir = evoloop_dir / "tasks" / config.name
         target_task_dir.mkdir(parents=True, exist_ok=True)
         for src_file in source_task_dir.iterdir():
             if src_file.is_file():
                 shutil.copy2(src_file, target_task_dir / src_file.name)
-
         cmd = ["python", "loop.py"]
         task_yaml = target_task_dir / "task.yaml"
         cwd = str(evoloop_dir)
@@ -320,36 +455,20 @@ def _launch_search_process(
     if effective_max > 0:
         env["EVOLOOP_MAX_EXPERIMENTS"] = str(effective_max)
 
-    # Write logs to workspace
-    config.workspace_dir.mkdir(parents=True, exist_ok=True)
-    log_path = config.workspace_dir / "search.log"
+    log_path = _log_path_for(config, "search")
 
     print(f"[search] Launching: {' '.join(cmd)}")
     print(f"[search] Log: {log_path}")
-    print(f"[search] PID will be reported after launch.")
 
-    try:
-        log_file = open(log_path, "a")
-        log_file.write(f"\n{'='*60}\n")
-        log_file.write(f"Search started at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        log_file.write(f"Command: {' '.join(cmd)}\n")
-        log_file.write(f"{'='*60}\n\n")
-        log_file.flush()
-
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,  # detach from parent — survives orchestrator restart
-        )
-        # Don't close log_file — the subprocess holds it.
-        # It will be closed when the process exits.
-        return proc
-    except Exception as e:
-        print(f"[search] Failed to launch: {e}")
-        return None
+    # Search uses direct streaming (no wrapper) — we read experiment DB from disk
+    return _launch_background_task(
+        cmd=cmd,
+        cwd=cwd,
+        env=env,
+        result_path=_result_path_for(config, "search"),  # not used for search
+        log_path=log_path,
+        capture_stdout=False,
+    )
 
 
 def tool_stop_search(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
@@ -366,7 +485,6 @@ def tool_stop_search(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
 
     print(f"[search] Sending SIGINT to PID {pid}...")
     try:
-        # SIGINT lets evoloop finish its current experiment and save state
         os.kill(pid, signal.SIGINT)
 
         # Wait up to 60s for graceful shutdown
@@ -375,20 +493,18 @@ def tool_stop_search(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
             if not _pid_is_alive(pid):
                 break
         else:
-            # Still alive after 60s — force kill
             print(f"[search] PID {pid} didn't stop gracefully. Sending SIGKILL.")
             os.kill(pid, signal.SIGKILL)
             time.sleep(1)
 
     except ProcessLookupError:
-        pass  # Already dead
+        pass
     except Exception as e:
         return {"success": False, "message": f"Failed to stop PID {pid}: {e}"}
 
     state.search_running = False
     state.search_pid = None
 
-    # Read final results
     experiments = _read_experiment_db(config)
     best = _find_best_experiment(experiments)
     if best:
@@ -401,7 +517,6 @@ def tool_stop_search(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
             state.best_artifact = artifact
         state.experiments_run = len(experiments)
 
-        # Save result for deploy
         from orchestrator.strategies.base import StrategyResult
         result = StrategyResult(
             success=True,
@@ -410,8 +525,7 @@ def tool_stop_search(config: SubnetConfig, state: AgentState) -> dict[str, Any]:
             experiments_run=len(experiments),
             summary=f"Stopped after {len(experiments)} experiments. Best: {objectives}",
         )
-        result_path = config.workspace_dir / "strategy_result.json"
-        result.save(result_path)
+        result.save(config.workspace_dir / "strategy_result.json")
 
     return {
         "success": True,
@@ -428,17 +542,14 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
     pid = state.search_pid
     process_alive = _pid_is_alive(pid)
 
-    # If state says running but process is dead, the search finished
     if state.search_running and not process_alive:
         state.search_running = False
         state.search_pid = None
 
-    # Read live experiment database
     experiments = _read_experiment_db(config)
     current_count = len(experiments)
     prev_count = state.experiments_run
 
-    # Track the best metric and detect staleness
     prev_best = state.best_metric
     best = _find_best_experiment(experiments)
 
@@ -448,11 +559,7 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
             primary_key = next(iter(objectives))
             current_best = objectives[primary_key]
 
-            # Check for improvement
-            improved = (
-                prev_best is None
-                or current_best < prev_best
-            )
+            improved = prev_best is None or current_best < prev_best
 
             if improved:
                 state.best_metric = current_best
@@ -466,7 +573,6 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
 
     state.experiments_run = current_count
 
-    # Build status
     status: dict[str, Any] = {
         "process_alive": process_alive,
         "search_finished": state.search_running is False and current_count > 0,
@@ -480,20 +586,17 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
         elapsed = time.time() - state.search_started_at
         status["elapsed"] = f"{elapsed / 3600:.1f}h" if elapsed > 3600 else f"{elapsed / 60:.0f}m"
 
-    # Check recent log output
-    log_path = config.workspace_dir / "search.log"
+    log_path = _log_path_for(config, "search")
     if log_path.exists():
         try:
             with open(log_path) as f:
                 lines = f.readlines()
-            # Last 5 non-empty lines
             recent = [l.rstrip() for l in lines[-10:] if l.strip()][-5:]
             if recent:
                 status["recent_log"] = recent
         except OSError:
             pass
 
-    # Build a human-readable summary
     parts = []
     if process_alive:
         parts.append("RUNNING")
@@ -510,7 +613,6 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
 
     status["message"] = ", ".join(parts)
 
-    # If search finished, save the result for deploy
     if not process_alive and current_count > 0 and best:
         from orchestrator.strategies.base import StrategyResult
         objectives = best.get("objectives", {})
@@ -522,8 +624,7 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
             experiments_run=current_count,
             summary=f"Completed {current_count} experiments. Best: {objectives}",
         )
-        result_path = config.workspace_dir / "strategy_result.json"
-        result.save(result_path)
+        result.save(config.workspace_dir / "strategy_result.json")
 
     return status
 
@@ -531,68 +632,223 @@ def tool_get_search_status(config: SubnetConfig, state: AgentState) -> dict[str,
 def tool_deploy(
     config: SubnetConfig, state: AgentState, artifact_path: str = ""
 ) -> dict[str, Any]:
-    """Deploy the best artifact to production."""
-    state.phase = "deploying"
-    state.phase_started_at = time.time()
+    """Non-blocking deploy: launch or read result."""
+
+    # If deploy is already running, check if it finished
+    if state.deploy_running:
+        if _pid_is_alive(state.deploy_pid):
+            return {"success": True, "message": f"Deploy still running (PID {state.deploy_pid}). Will check next tick."}
+
+        # Process finished — read result
+        state.deploy_running = False
+        state.deploy_pid = None
+
+        result = _read_task_result(_result_path_for(config, "deploy"))
+        if result is None:
+            state.consecutive_errors += 1
+            state.last_error = "Deploy finished but no result file found"
+            return {"success": False, "message": "Deploy finished but no result file found."}
+
+        if result["exit_code"] == 0:
+            # Try to parse metadata from stdout (last line = JSON)
+            metadata = {}
+            stdout_lines = result.get("stdout", "").strip().split("\n")
+            if stdout_lines:
+                try:
+                    metadata = json.loads(stdout_lines[-1])
+                except json.JSONDecodeError:
+                    pass
+
+            state.deployed = True
+            state.deployed_at = time.time()
+            state.deployed_model_id = metadata.get("model_id")
+            state.phase = "monitoring"
+            state.phase_started_at = time.time()
+            state.consecutive_errors = 0
+            state.last_error = None
+            return {
+                "success": True,
+                "message": "Deployment complete.",
+                "model_id": state.deployed_model_id,
+            }
+        else:
+            stderr_snippet = result.get("stderr", "")[:300]
+            state.consecutive_errors += 1
+            state.last_error = f"Deploy failed (exit {result['exit_code']}): {stderr_snippet}"
+            return {"success": False, "message": state.last_error}
 
     # Resolve artifact path
-    deploy_artifact = None
+    deploy_artifact = ""
     if artifact_path:
-        deploy_artifact = Path(artifact_path)
+        deploy_artifact = artifact_path
     elif state.best_artifact:
-        deploy_artifact = Path(state.best_artifact)
+        deploy_artifact = state.best_artifact
     else:
-        # Try loading from last search result
-        result_path = config.workspace_dir / "strategy_result.json"
-        if result_path.exists():
+        result_file = config.workspace_dir / "strategy_result.json"
+        if result_file.exists():
             try:
-                with open(result_path) as f:
+                with open(result_file) as f:
                     data = json.load(f)
                 if data.get("best_artifact"):
-                    deploy_artifact = Path(data["best_artifact"])
+                    deploy_artifact = data["best_artifact"]
             except (json.JSONDecodeError, OSError):
                 pass
 
-    result = run_deploy(config.subnet_dir, deploy_artifact, config.workspace_dir)
+    # Find deploy script
+    deploy_script = config.subnet_dir / "deploy.py"
+    if not deploy_script.exists():
+        deploy_script = config.subnet_dir / "deploy.sh"
+    if not deploy_script.exists():
+        return {"success": False, "message": f"No deploy script found in {config.subnet_dir}"}
 
-    if result.success:
-        state.deployed = True
-        state.deployed_at = time.time()
-        state.deployed_model_id = result.metadata.get("model_id")
-        state.phase = "monitoring"
-        state.phase_started_at = time.time()
-        state.consecutive_errors = 0
-        state.last_error = None
-        return {
-            "success": True,
-            "message": result.message,
-            "model_id": state.deployed_model_id,
-        }
-    else:
+    cmd = (
+        [sys.executable, str(deploy_script), deploy_artifact]
+        if deploy_script.suffix == ".py"
+        else ["bash", str(deploy_script), deploy_artifact]
+    )
+
+    state.phase = "deploying"
+    state.phase_started_at = time.time()
+
+    env = {
+        **os.environ,
+        "WORKSPACE_DIR": str(config.workspace_dir),
+        "ARTIFACT_PATH": deploy_artifact,
+    }
+
+    proc = _launch_background_task(
+        cmd=cmd,
+        cwd=str(config.subnet_dir),
+        env=env,
+        result_path=_result_path_for(config, "deploy"),
+        log_path=_log_path_for(config, "deploy"),
+    )
+
+    if proc is None:
         state.consecutive_errors += 1
-        state.last_error = result.message
-        return {"success": False, "message": result.message}
+        state.last_error = "Failed to launch deploy process"
+        return {"success": False, "message": "Failed to launch deploy process."}
+
+    state.deploy_running = True
+    state.deploy_pid = proc.pid
+    print(f"[deploy] Launched in background (PID {proc.pid})")
+
+    return {"success": True, "message": f"Deploy launched in background (PID {proc.pid})."}
 
 
 def tool_check_live_performance(
     config: SubnetConfig, state: AgentState
 ) -> dict[str, Any]:
-    """Check live miner performance via the subnet's monitor script."""
-    result = run_monitor(config.subnet_dir, config.workspace_dir)
+    """Non-blocking monitor: launch or read result."""
 
-    state.last_monitor_at = time.time()
-    state.last_monitor_healthy = result.healthy
+    # If monitor is already running, check if it finished
+    if state.monitor_running:
+        if _pid_is_alive(state.monitor_pid):
+            return {"success": True, "message": f"Monitor still running (PID {state.monitor_pid}). Will check next tick."}
 
-    if result.metrics:
-        state.last_emission_share = result.metrics.get("emission_share")
-        state.last_rank = result.metrics.get("rank")
+        # Process finished — read result
+        state.monitor_running = False
+        state.monitor_pid = None
 
-    return {
-        "healthy": result.healthy,
-        "metrics": result.metrics,
-        "should_re_evolve": result.should_re_evolve,
-        "message": result.message,
+        result = _read_task_result(_result_path_for(config, "monitor"))
+        if result is None:
+            return {"success": False, "message": "Monitor finished but no result file found."}
+
+        # Parse monitor JSON output from stdout
+        monitor_data = {}
+        stdout_lines = result.get("stdout", "").strip().split("\n")
+        if stdout_lines:
+            try:
+                monitor_data = json.loads(stdout_lines[-1])
+            except json.JSONDecodeError:
+                pass
+
+        healthy = monitor_data.get("healthy", result["exit_code"] == 0)
+        metrics = monitor_data.get("metrics", {})
+        should_re_evolve = monitor_data.get("should_re_evolve", False)
+
+        state.last_monitor_at = time.time()
+        state.last_monitor_healthy = healthy
+        if metrics:
+            state.last_emission_share = metrics.get("emission_share")
+            state.last_rank = metrics.get("rank")
+            state.add_monitor_snapshot(metrics)
+
+        # Build trend info
+        trend_info = _build_trend_info(state.monitor_history)
+
+        return {
+            "healthy": healthy,
+            "metrics": metrics,
+            "should_re_evolve": should_re_evolve,
+            "trend": trend_info,
+            "message": monitor_data.get("message", f"exit_code={result['exit_code']}"),
+        }
+
+    # Launch monitor in background
+    monitor_script = config.subnet_dir / "monitor.py"
+    if not monitor_script.exists():
+        return {"healthy": True, "message": "No monitor.py — skipping."}
+
+    env = {
+        **os.environ,
+        "WORKSPACE_DIR": str(config.workspace_dir),
     }
+
+    proc = _launch_background_task(
+        cmd=[sys.executable, str(monitor_script)],
+        cwd=str(config.subnet_dir),
+        env=env,
+        result_path=_result_path_for(config, "monitor"),
+        log_path=_log_path_for(config, "monitor"),
+    )
+
+    if proc is None:
+        return {"success": False, "message": "Failed to launch monitor process."}
+
+    state.monitor_running = True
+    state.monitor_pid = proc.pid
+    print(f"[monitor] Launched in background (PID {proc.pid})")
+
+    return {"success": True, "message": f"Monitor launched in background (PID {proc.pid})."}
+
+
+def _build_trend_info(history: list[dict]) -> dict[str, Any]:
+    """Analyze monitor history to detect trends."""
+    if len(history) < 2:
+        return {}
+
+    trend: dict[str, Any] = {}
+
+    # Emission share trend
+    emissions = [(h["timestamp"], h.get("emission_share")) for h in history if h.get("emission_share") is not None]
+    if len(emissions) >= 2:
+        latest = emissions[-1][1]
+        oldest = emissions[0][1]
+        hours_span = (emissions[-1][0] - emissions[0][0]) / 3600
+
+        if hours_span > 0:
+            direction = "rising" if latest > oldest else "declining" if latest < oldest else "stable"
+            trend["emission_share"] = {
+                "current": latest,
+                "oldest": oldest,
+                "direction": direction,
+                "span_hours": round(hours_span, 1),
+            }
+
+    # Rank trend
+    ranks = [(h["timestamp"], h.get("rank")) for h in history if h.get("rank") is not None]
+    if len(ranks) >= 2:
+        latest_rank = ranks[-1][1]
+        oldest_rank = ranks[0][1]
+        direction = "improving" if latest_rank < oldest_rank else "declining" if latest_rank > oldest_rank else "stable"
+        trend["rank"] = {
+            "current": latest_rank,
+            "oldest": oldest_rank,
+            "direction": direction,
+        }
+
+    return trend
 
 
 def tool_wait(

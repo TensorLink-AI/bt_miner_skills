@@ -21,6 +21,10 @@ class AgentState:
     phase: str = "idle"  # idle, setup, searching, deploying, monitoring
     phase_started_at: float = 0.0  # unix timestamp
 
+    # Background task tracking (generic pattern: pid + running flag)
+    setup_running: bool = False
+    setup_pid: int | None = None
+
     # Search state
     search_running: bool = False
     search_pid: int | None = None  # PID of background search process
@@ -35,12 +39,20 @@ class AgentState:
     deployed: bool = False
     deployed_at: float = 0.0
     deployed_model_id: str | None = None
+    deploy_running: bool = False
+    deploy_pid: int | None = None
 
     # Monitoring state
+    monitor_running: bool = False
+    monitor_pid: int | None = None
     last_monitor_at: float = 0.0
     last_monitor_healthy: bool | None = None
     last_emission_share: float | None = None
     last_rank: int | None = None
+    monitor_history: list[dict[str, Any]] = field(default_factory=list)
+
+    # Miner process tracking
+    miner_pid: int | None = None
 
     # Agent decision history (last N decisions for context)
     decision_log: list[dict[str, Any]] = field(default_factory=list)
@@ -78,10 +90,19 @@ class AgentState:
             return f"{secs / 60:.0f}m"
         return f"{secs / 3600:.1f}h"
 
+    def add_monitor_snapshot(self, metrics: dict[str, Any]) -> None:
+        """Record a monitor result for trend analysis. Keeps last 50."""
+        entry = {"timestamp": time.time(), **metrics}
+        self.monitor_history.append(entry)
+        if len(self.monitor_history) > 50:
+            self.monitor_history = self.monitor_history[-50:]
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "phase": self.phase,
             "phase_started_at": self.phase_started_at,
+            "setup_running": self.setup_running,
+            "setup_pid": self.setup_pid,
             "search_running": self.search_running,
             "search_pid": self.search_pid,
             "search_started_at": self.search_started_at,
@@ -93,10 +114,16 @@ class AgentState:
             "deployed": self.deployed,
             "deployed_at": self.deployed_at,
             "deployed_model_id": self.deployed_model_id,
+            "deploy_running": self.deploy_running,
+            "deploy_pid": self.deploy_pid,
+            "monitor_running": self.monitor_running,
+            "monitor_pid": self.monitor_pid,
             "last_monitor_at": self.last_monitor_at,
             "last_monitor_healthy": self.last_monitor_healthy,
             "last_emission_share": self.last_emission_share,
             "last_rank": self.last_rank,
+            "monitor_history": self.monitor_history,
+            "miner_pid": self.miner_pid,
             "decision_log": self.decision_log,
             "consecutive_errors": self.consecutive_errors,
             "last_error": self.last_error,

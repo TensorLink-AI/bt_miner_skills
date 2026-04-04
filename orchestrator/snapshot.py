@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from orchestrator.config import SubnetConfig
 from orchestrator.state import AgentState
+from orchestrator.tools import _pid_is_alive
 
 
 def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
@@ -21,13 +22,25 @@ def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
     lines.append(f"Current phase: {state.phase} ({state.time_in_phase_str()} in this phase)")
     lines.append("")
 
+    # --- Background tasks ---
+    lines.append("== Background Tasks ==")
+    _append_task_status(lines, "Setup", state.setup_running, state.setup_pid)
+    _append_task_status(lines, "Deploy", state.deploy_running, state.deploy_pid)
+    _append_task_status(lines, "Monitor", state.monitor_running, state.monitor_pid)
+    if state.miner_pid:
+        alive = _pid_is_alive(state.miner_pid)
+        lines.append(f"  Miner: PID {state.miner_pid} ({'alive' if alive else 'DEAD'})")
+    lines.append("")
+
     # --- Search status ---
     lines.append("== Search ==")
     if state.search_running:
         elapsed = now - state.search_started_at if state.search_started_at else 0
         elapsed_str = f"{elapsed / 3600:.1f}h" if elapsed > 3600 else f"{elapsed / 60:.0f}m"
         pid_info = f", PID {state.search_pid}" if state.search_pid else ""
-        lines.append(f"  Status: RUNNING (started {elapsed_str} ago{pid_info})")
+        alive = _pid_is_alive(state.search_pid)
+        status_label = "RUNNING" if alive else "FINISHED (process exited)"
+        lines.append(f"  Status: {status_label} (started {elapsed_str} ago{pid_info})")
     elif state.experiments_run > 0 and state.phase == "searching":
         lines.append(f"  Status: FINISHED (search process exited)")
     else:
@@ -56,6 +69,8 @@ def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
         lines.append(f"  Status: DEPLOYED ({deployed_str} ago)")
         if state.deployed_model_id:
             lines.append(f"  Model: {state.deployed_model_id}")
+    elif state.deploy_running:
+        lines.append(f"  Status: DEPLOYING (PID {state.deploy_pid})")
     else:
         lines.append(f"  Status: not deployed")
 
@@ -72,6 +87,12 @@ def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
             lines.append(f"  Emission share: {state.last_emission_share:.4f}")
         if state.last_rank is not None:
             lines.append(f"  Rank: {state.last_rank}")
+
+        # Show trend if we have history
+        if len(state.monitor_history) >= 2:
+            _append_trends(lines, state.monitor_history)
+    elif state.monitor_running:
+        lines.append(f"  Monitor running (PID {state.monitor_pid}), awaiting results")
     else:
         lines.append(f"  Not yet checked")
 
@@ -112,6 +133,47 @@ def build_snapshot(config: SubnetConfig, state: AgentState) -> str:
     return "\n".join(lines)
 
 
+def _append_task_status(lines: list[str], name: str, running: bool, pid: int | None) -> None:
+    """Append a single background task's status line."""
+    if running:
+        alive = _pid_is_alive(pid)
+        if alive:
+            lines.append(f"  {name}: RUNNING (PID {pid})")
+        else:
+            lines.append(f"  {name}: FINISHED (PID {pid} exited, result pending)")
+    else:
+        lines.append(f"  {name}: idle")
+
+
+def _append_trends(lines: list[str], history: list[dict]) -> None:
+    """Append trend information from monitor history."""
+    emissions = [h.get("emission_share") for h in history if h.get("emission_share") is not None]
+    if len(emissions) >= 2:
+        latest = emissions[-1]
+        oldest = emissions[0]
+        if latest > oldest:
+            direction = "rising"
+        elif latest < oldest:
+            direction = "declining"
+        else:
+            direction = "stable"
+
+        hours = (history[-1].get("timestamp", 0) - history[0].get("timestamp", 0)) / 3600
+        lines.append(f"  Trend: emission_share {direction} ({oldest:.4f} -> {latest:.4f} over {hours:.1f}h)")
+
+    ranks = [h.get("rank") for h in history if h.get("rank") is not None]
+    if len(ranks) >= 2:
+        latest_rank = ranks[-1]
+        oldest_rank = ranks[0]
+        if latest_rank < oldest_rank:
+            direction = "improving"
+        elif latest_rank > oldest_rank:
+            direction = "worsening"
+        else:
+            direction = "stable"
+        lines.append(f"  Trend: rank {direction} ({oldest_rank} -> {latest_rank})")
+
+
 SYSTEM_PROMPT = """\
 You are the overlord agent managing a Bittensor subnet miner. Your job is to \
 look at the current situation and decide what to do next.
@@ -125,6 +187,10 @@ You have these tools available:
 - check_live_performance: Check live metrics via the subnet's monitor
 - wait: Explicitly do nothing (must provide a reason)
 
+ALL tools are non-blocking. They launch background tasks and return immediately. \
+If a task is already running, calling the tool again checks its status and \
+returns the result when ready.
+
 Decision principles:
 1. Don't rush. If search is running and improving, let it run.
 2. If search is stale (no improvement for many experiments), stop and deploy best-so-far.
@@ -132,6 +198,8 @@ Decision principles:
 4. After deploying, monitor. If performance degrades, re-search.
 5. If something is broken (errors, failed setup), diagnose before retrying.
 6. You can only call ONE tool per tick. Choose the most important action.
+7. If a background task is running, you can call wait or check another aspect.
+8. Watch the trends — declining emission share means it's time to re-evolve.
 
 Respond with a JSON object:
 {
