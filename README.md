@@ -51,6 +51,8 @@ The orchestrator is an **LLM agent**, not a rigid pipeline. Every tick it:
 
 The agent has 7 tools: `run_setup`, `start_search`, `stop_search`, `get_search_status`, `deploy`, `check_live_performance`, `wait`. It decides when to use each based on the actual situation, not hardcoded rules.
 
+**All tools are non-blocking.** Setup, search, deploy, and monitor each launch as background subprocesses — the agent keeps ticking (default every 5 minutes) regardless of how long they take. On subsequent ticks, the agent checks whether a background task has finished and decides what to do next. Tools are also idempotent: re-calling a tool that's already running returns its current status instead of launching a duplicate.
+
 When no LLM is configured, a **heuristic fallback** follows the obvious path: setup → search → deploy → monitor → re-search if degrading.
 
 ## Quick Start
